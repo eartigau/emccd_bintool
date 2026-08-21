@@ -15,6 +15,13 @@
 Everything is driven by one settings file, **`embin_config.yaml`**. You do not
 need to edit any Python file to use this toolkit.
 
+**Project page:** <https://eartigau.github.io/emccd_bintool/> &mdash; the same
+material as this README, plus the figures, in three pages: how to run it, how to
+read the results, and why the bins are where they are. It asks for a password
+(`omm4ever`) so it stays a working document for the group rather than a
+published one. That gate is a door, not a safe: it hides the pages from casual
+visitors and from search engines, and nothing on them is confidential anyway.
+
 ---
 
 ## The short version
