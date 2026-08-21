@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Reading the results</title>
+    <meta name="description" content="What every output file of the EMCCD bin tool contains, and how to open it." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="passwordOverlay" class="password-overlay" aria-live="polite">
+      <div class="password-panel">
+        <p class="eyebrow">Restricted page</p>
+        <h2>Enter the project password</h2>
+        <form id="passwordForm">
+          <label class="sr-only" for="passwordInput">Password</label>
+          <input id="passwordInput" name="password" type="password" placeholder="Password" autocomplete="off" required />
+          <button type="submit">Unlock</button>
+        </form>
+        <p id="passwordError" class="error-message" hidden></p>
+        <p class="hint">If you are working on this project and do not have the password, ask Etienne.</p>
+      </div>
+    </div>
+
+    <div id="siteContent" class="site-content" hidden>
+      <div class="bg-orb orb-a"></div>
+      <div class="bg-orb orb-b"></div>
+
+      <div class="site-banner">
+        <div class="site-banner-inner">
+          <div class="site-banner-text">
+            <h2>EMCCD bin tool</h2>
+            <p>PESTO photon-counting &middot; per-pixel histograms &middot; flux maps and light curves</p>
+          </div>
+          <a href="https://eartigau.github.io/" class="home-link">&larr; Home</a>
+        </div>
+      </div>
+
+      <nav class="site-nav">
+        <a href="index.html">1. Start here</a>
+        <a href="outputs.html" class="current">2. Reading the results</a>
+        <a href="bins.html">3. Why these bins</a>
+      </nav>
+
+      <header class="hero">
+        <p class="eyebrow">What comes out of the machine</p>
+        <h1>Reading the results</h1>
+        <p class="subtitle">
+          Every file the toolkit writes, what is inside it, and the few lines of Python
+          that get the numbers out. All the figures below are the real output of the
+          1001-frame PESTO test sequence.
+        </p>
+      </header>
+
+      <main class="layout">
+        <!-- ─────────────────── where things land ───────────────────── -->
+        <section class="card span-3">
+          <h2>Everything lands in <code>data_bin/</code></h2>
+          <p>
+            Nothing is ever written next to your raw frames. If you want the results
+            somewhere else, change one line in the settings file:
+            <code>output.directory</code>.
+          </p>
+          <div class="table-wrap">
+            <table class="data">
+              <tr><th>File</th><th>What it is</th></tr>
+              <tr>
+                <td class="mono">embin_chunk00.fits<br />embin_chunk01.fits<br />&hellip;</td>
+                <td>One file per chunk of frames. The full result for those frames: histograms, flux map, error map, star stamps. Described below.</td>
+              </tr>
+              <tr>
+                <td class="mono">chunk_summary.fits</td>
+                <td>All the chunks stitched together in time, plus the light curves.</td>
+              </tr>
+              <tr>
+                <td class="mono">figures/bins_on_data.pdf</td>
+                <td>Your bin edges drawn on your own data. Written by <code>plot_bins.py</code>.</td>
+              </tr>
+              <tr>
+                <td class="mono">figures/chunk_lightcurves.pdf</td>
+                <td>Flux of every tracked star, chunk by chunk.</td>
+              </tr>
+              <tr>
+                <td class="mono">figures/chunk_drift.pdf</td>
+                <td>How far the field moved during the sequence, measured from the stars themselves.</td>
+              </tr>
+              <tr>
+                <td class="mono">figures/chunk_flux_maps.pdf</td>
+                <td>The flux map of every chunk, side by side.</td>
+              </tr>
+            </table>
+          </div>
+        </section>
+
+        <!-- ─────────────────── one chunk file ───────────────────────── -->
+        <section class="card span-2">
+          <h2>Inside one <code>embin_chunkNN.fits</code></h2>
+          <p>
+            A FITS file can hold several data blocks, called extensions. List them with:
+          </p>
+          <div class="codeblock">python -c "from astropy.io import fits; fits.open('data_bin/embin_chunk00.fits').info()"</div>
+          <div class="table-wrap">
+            <table class="data">
+              <tr><th>Extension</th><th>Shape</th><th>Contents</th></tr>
+              <tr>
+                <td class="mono">PRIMARY</td>
+                <td class="num">no data</td>
+                <td>A header recording every setting of the run: the bin edges, the detector constants, which frames went in, how many values fell in the open top bin. If you ever wonder how a file was made, this is where the answer is.</td>
+              </tr>
+              <tr>
+                <td class="mono">FLUX</td>
+                <td class="num">426 &times; 1024</td>
+                <td>The fitted mean flux of each pixel, in electrons per frame.</td>
+              </tr>
+              <tr>
+                <td class="mono">FLUX_ERR</td>
+                <td class="num">426 &times; 1024</td>
+                <td>The 1-sigma error on that flux, same units.</td>
+              </tr>
+              <tr>
+                <td class="mono">HISTCUBE</td>
+                <td class="num">16 &times; 426 &times; 1024</td>
+                <td>The histograms themselves. Plane <em>b</em> holds, for every pixel, how many frames of this chunk fell in bin <em>b</em>. This is the compressed data: 16 numbers per pixel instead of 64 frames.</td>
+              </tr>
+              <tr>
+                <td class="mono">HEADERS</td>
+                <td class="num">64 rows</td>
+                <td>One row per input frame, one column per FITS keyword, so the timestamps and the instrument settings survive the compression.</td>
+              </tr>
+              <tr>
+                <td class="mono">STAMP01, STAMP02, &hellip;</td>
+                <td class="num">64 &times; 16 &times; 16</td>
+                <td>The raw, untouched ADU values of every frame in a small box around each detected star. Nothing about a star's own pixels is lost.</td>
+              </tr>
+            </table>
+          </div>
+          <div class="callout">
+            <p>
+              <strong>The sizes shown are for the PESTO test data.</strong> 426 &times; 1024 is
+              the frame size, 16 is the number of bins, 64 is the chunk size. Yours will
+              differ if any of those differ.
+            </p>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Getting a flux map out</h2>
+          <div class="codeblock">from astropy.io import fits
+import matplotlib.pyplot as plt
+
+f = fits.getdata('data_bin/embin_chunk00.fits', 'FLUX')
+e = fits.getdata('data_bin/embin_chunk00.fits', 'FLUX_ERR')
+
+print(f.shape)          # (426, 1024)
+print(f[300, 700])      # flux of one pixel, e-/frame
+
+plt.imshow(f, origin='lower', vmin=0, vmax=0.5)
+plt.colorbar(label='e-/frame')
+plt.show()</div>
+          <p class="hint">
+            You can also open the file in DS9 and step through the extensions there. The
+            <code>HISTCUBE</code> extension will show as a 16-plane cube.
+          </p>
+        </section>
+
+        <!-- ─────────────────── summary file ─────────────────────────── -->
+        <section class="card span-3">
+          <h2>Inside <code>chunk_summary.fits</code></h2>
+          <p>
+            This is the file to use for anything time-resolved. It holds the flux maps of
+            every chunk stacked into one cube, and two tables.
+          </p>
+          <div class="table-wrap">
+            <table class="data">
+              <tr><th>Extension</th><th>Contents</th></tr>
+              <tr><td class="mono">FLUX, FLUX_ERR</td><td>The per-chunk flux and error maps, stacked: <code>(15, 426, 1024)</code> for the test sequence. Plane 0 is the first chunk in time.</td></tr>
+              <tr><td class="mono">CHUNKS</td><td>One row per chunk: which frames it used, its start, middle and end time in seconds since the first frame, the sky level, how many stars were found.</td></tr>
+              <tr><td class="mono">TRACKS</td><td>One row per star per chunk: which star (<code>track</code>), which chunk, the time, the position, the aperture flux and its error. <strong>This is the light curve table.</strong></td></tr>
+            </table>
+          </div>
+
+          <div class="codeblock">from astropy.io import fits
+from astropy.table import Table
+import matplotlib.pyplot as plt
+
+t = Table(fits.getdata('data_bin/chunk_summary.fits', 'TRACKS'))
+print(t.colnames)
+# ['track', 'chunk', 't_mid', 'x', 'y', 'flux', 'flux_err', 'peak_flux', 'peak_err', 'signif']
+
+star = t[t['track'] == 0]            # track 0 is the brightest star
+plt.errorbar(star['t_mid'], star['flux'], yerr=star['flux_err'], fmt='o-')
+plt.xlabel('time since the first frame [s]')
+plt.ylabel('flux [e-/frame]')
+plt.show()</div>
+          <p class="hint">
+            A "track" is one star followed from chunk to chunk. Stars are matched between
+            consecutive chunks by position, within <code>chunks.match_radius</code> pixels.
+            Track numbers are ordered by how many chunks the star appears in, then by
+            brightness, so track 0 is normally the brightest star that is present throughout.
+          </p>
+        </section>
+
+        <!-- ─────────────────── figures ─────────────────────────────── -->
+        <section class="card span-3">
+          <h2>The three figures, and what to look for</h2>
+
+          <figure class="lecture-figure">
+            <img src="assets/chunk_lightcurves.png" alt="Aperture light curves of seven stars over fifteen chunks" />
+            <figcaption>
+              <strong>chunk_lightcurves.pdf</strong> &mdash; one panel per tracked star, flux
+              against time, with the error bar the fit itself produced. On the test sequence
+              the scatter (4.8 to 11 %) is larger than the error bars (2.8 to 9.4 %), and the
+              stars do not all vary together, which is what atmospheric scintillation at a
+              3-second cadence looks like. Check your own: if the scatter is far larger than
+              the error bars <em>and</em> every star moves in step, you are looking at clouds,
+              not at your target.
+            </figcaption>
+          </figure>
+
+          <figure class="lecture-figure">
+            <img src="assets/chunk_drift.png" alt="Measured drift of the field in x and y over 45 seconds" />
+            <figcaption>
+              <strong>chunk_drift.pdf</strong> &mdash; how far the field moved, measured
+              independently from every star. All the curves lie on top of one another, which
+              is the point: this is the whole field moving (+6.7 pixels in x, &minus;2.1 in y
+              over 45 s), not one star wandering. This figure is what justifies the chunk
+              size; if the drift <em>within</em> one chunk approaches a pixel, use shorter
+              chunks.
+            </figcaption>
+          </figure>
+
+          <figure class="lecture-figure">
+            <img src="assets/chunk_flux_maps.png" alt="The fitted flux map of each of the fifteen chunks" />
+            <figcaption>
+              <strong>chunk_flux_maps.pdf</strong> &mdash; the fitted flux map of each chunk.
+              The stars should look like stars: compact and round. If they are stretched into
+              short streaks, the field drifted too far inside one chunk and
+              <code>chunks.size</code> should come down.
+            </figcaption>
+          </figure>
+        </section>
+
+        <!-- ─────────────────── sanity checks ───────────────────────── -->
+        <section class="card span-2">
+          <h2>Four checks worth doing every time</h2>
+          <ol>
+            <li>
+              <strong>Does the sky level make sense?</strong> The program prints it for every
+              chunk. On the PESTO test sequence it reads 0.0159 to 0.0170 e&minus;/frame,
+              against 0.0162 &plusmn; 0.0001 from an independent MCMC calibration of the same
+              data. Agreement like that means the detector constants and the bins are right.
+            </li>
+            <li>
+              <strong>Is the sky level stable from chunk to chunk?</strong> A jump means
+              something changed: clouds, the moon, a different gain setting mid-sequence.
+            </li>
+            <li>
+              <strong>Do the stars look round in <code>chunk_flux_maps.pdf</code>?</strong>
+              Streaks mean the chunks are too long.
+            </li>
+            <li>
+              <strong>Is anything landing in the open top bin?</strong> The header keyword
+              <code>NOVER</code> counts the pixel values that exceeded the last edge. On the
+              test data it is 39 out of 27.9 million, which is the design working as intended.
+              A large number means your fluxes are higher than the range the bins were
+              designed for, and you should redesign them.
+            </li>
+          </ol>
+        </section>
+
+        <section class="card">
+          <h2>When something goes wrong</h2>
+          <div class="table-wrap">
+            <table class="data">
+              <tr><th>What you see</th><th>What it means</th></tr>
+              <tr><td class="mono">no file matches &hellip;/data_night/*.fits</td><td>The folder is empty, or <code>input.directory</code> points at the wrong place.</td></tr>
+              <tr><td class="mono">only 12 frame(s) found &hellip;</td><td>You have fewer frames than <code>chunks.size</code>. Lower it.</td></tr>
+              <tr><td class="mono">histogram.edges must be strictly increasing</td><td>You edited the edge list and left two equal or out-of-order numbers.</td></tr>
+              <tr><td class="mono">ModuleNotFoundError</td><td>The virtual environment is not active in this terminal. Run <code>source .venv/bin/activate</code>.</td></tr>
+              <tr><td>The flux map is nearly all <code>0.0001</code></td><td>That is <code>fit.mu_min</code>, the bottom of the search grid. Background pixels really did see nothing over a few frames; this is normal, not a bug.</td></tr>
+              <tr><td>Every star sits exactly at <code>fit.mu_max</code></td><td>Your flux grid stops below the real fluxes. Raise <code>mu_max</code>, and redesign the bins for the higher range.</td></tr>
+              <tr><td>Stars look stretched or doubled</td><td>The field drifted too much inside one chunk. Lower <code>chunks.size</code>.</td></tr>
+            </table>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <p>
+          <a href="https://github.com/eartigau/emccd_bintool" target="_blank">Source on GitHub</a>
+          &middot;
+          <a href="https://eartigau.github.io/" target="_blank">More tools</a>
+        </p>
+      </footer>
+
+      <div id="lightbox" class="lightbox" hidden>
+        <button id="lightboxClose" class="lightbox-close" aria-label="Close" type="button">&times;</button>
+        <figure class="lightbox-figure">
+          <img id="lightboxImg" src="" alt="" />
+          <figcaption id="lightboxCaption"></figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <script src="gate.js"></script>
+    <script src="lightbox.js"></script>
+  </body>
+</html>

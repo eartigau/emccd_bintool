@@ -1,0 +1,6 @@
+# Everything this toolkit needs. Install with:  pip install -r requirements.txt
+numpy>=1.22
+scipy>=1.8
+astropy>=5.0
+pyyaml>=6.0
+matplotlib>=3.5

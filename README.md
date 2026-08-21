@@ -1,0 +1,295 @@
+# emccd_bintool
+
+**Two things live in this repository.**
+
+1. **`bin_optimizer.py`** answers the question *"how few numbers per pixel can I
+   keep and still measure the flux properly?"* For an EMCCD it computes where
+   the histogram bin edges belong, and how much precision a given number of bins
+   costs you. The full reasoning is in [`doc/optimal_bins.pdf`](doc/optimal_bins.pdf).
+
+2. **`embin.py` and `run_chunks.py`** apply that to a real night of PESTO data.
+   They read a folder of raw frames and produce, for every pixel, a histogram of
+   the values that pixel took, then a fitted mean flux in electrons per frame,
+   then the stars found in that flux map, then light curves.
+
+Everything is driven by one settings file, **`embin_config.yaml`**. You do not
+need to edit any Python file to use this toolkit.
+
+---
+
+## The short version
+
+```
+your frames  ->  per-pixel histogram (16 numbers per pixel)  ->  flux map  ->  stars  ->  light curves
+```
+
+An EMCCD read is not "the flux plus a bit of noise". A pixel that collected *n*
+photo-electrons in one frame reads out at
+
+```
+bias  +  Gamma(n, gain)  +  Gaussian(0, read noise)
+```
+
+The EM register multiplies each electron by a *random* amount, so the same *n*
+gives wildly different ADU values from one frame to the next. Averaging the ADU
+values throws away most of the information at the sub-electron fluxes these
+cameras are used at. The **shape** of a pixel's ADU distribution is what carries
+the flux, and 16 well-placed histogram bins capture 99.4 % of it, in 16 numbers
+per pixel instead of one number per pixel per frame.
+
+---
+
+## Installing it (do this once)
+
+You need Python 3.9 or newer. Open a terminal, then:
+
+```bash
+# 1. Get the code.
+git clone https://github.com/eartigau/emccd_bintool.git
+cd emccd_bintool
+
+# 2. Make a virtual environment. This keeps the packages used here separate
+#    from the rest of your machine, so nothing you install can break another
+#    project. The folder .venv is created inside emccd_bintool.
+python3 -m venv .venv
+
+# 3. Activate it. You must do this EVERY time you open a new terminal to work
+#    on this project. Your prompt gains a "(.venv)" prefix when it worked.
+source .venv/bin/activate          # macOS / Linux
+# .venv\Scripts\activate           # Windows PowerShell
+
+# 4. Install the four packages this code needs.
+pip install -r requirements.txt
+```
+
+Check that it worked:
+
+```bash
+python bin_optimizer.py --bias 303.6178 --gain 71.0598 --ron 6.8164 --sat 5000 \
+                        --nbins 16 --mu-min 1e-3 --mu-max 4
+```
+
+You should get a table of 16 bins ending with a line saying the worst-case
+efficiency is about 0.989. If instead you get `ModuleNotFoundError: No module
+named 'numpy'`, step 3 or step 4 did not happen: activate the environment and
+run the `pip install` again.
+
+---
+
+## Running it on a night of data
+
+### Step 1 -- put your frames somewhere
+
+Create a folder called `data_night` inside `emccd_bintool` and copy your raw
+frames into it. One FITS file per readout, which is how PESTO writes them
+(`nc-image_0.fits`, `nc-image_1.fits`, ...).
+
+```bash
+mkdir data_night
+cp /wherever/your/frames/are/*.fits data_night/
+```
+
+If your frames are large and you would rather not copy them, open
+`embin_config.yaml` and change the line
+
+```yaml
+  directory: "data_night"
+```
+
+to the real path, for example `directory: "/Users/you/data/TOI1452Science"`.
+
+### Step 2 -- check the detector constants
+
+Open `embin_config.yaml` and look at section 3. Those four numbers describe the
+camera:
+
+```yaml
+detector:
+  bias: 303.6178      # ADU
+  ron: 6.8164         # ADU
+  gain: 71.0598       # ADU/e-
+  full_well: 5000     # ADU
+```
+
+They are correct **for the PESTO EMCCD at the gain setting used in the test
+sequence**. If your data comes from a different camera, or from PESTO at a
+different EM gain, these numbers are wrong for you and everything downstream
+will be wrong with them. Get them from a calibration fit first, put them here,
+and then **re-run the bin optimiser** (see "Designing your own bins" below),
+because the bin edges depend on them.
+
+### Step 3 -- try two chunks before you launch the whole night
+
+```bash
+python run_chunks.py --n-chunks 2
+```
+
+This takes about half a minute per chunk and tells you, in colour, exactly what
+it is doing: green for progress, blue for measured numbers, orange for anything
+it skipped, red if it stops. Look at the output and check three things:
+
+- it found your frames ("`1001 frames in ...`");
+- the sky level it reports is sensible (`0.0160 e-/frame` on the PESTO test
+  sequence);
+- it found some stars.
+
+### Step 4 -- run the whole thing
+
+```bash
+python run_chunks.py
+```
+
+On the 1001-frame PESTO test sequence this takes about 3.5 minutes and produces
+15 chunks. Everything is written into the folder **`data_bin/`**.
+
+---
+
+## What you get, file by file
+
+Everything lands in `data_bin/` (change `output.directory` in the YAML if you
+want it elsewhere).
+
+| File | What it is |
+|---|---|
+| `embin_chunk00.fits` ... | one file per chunk of frames, described below |
+| `chunk_summary.fits` | all the chunks stitched together, plus the light curves |
+| `figures/chunk_lightcurves.pdf` | flux of every tracked star versus time |
+| `figures/chunk_drift.pdf` | how far the field moved during the sequence |
+| `figures/chunk_flux_maps.pdf` | the flux map of each chunk, side by side |
+
+Each `embin_chunkNN.fits` is a multi-extension FITS file. Open it with
+
+```bash
+python -c "from astropy.io import fits; fits.open('data_bin/embin_chunk00.fits').info()"
+```
+
+and you will see:
+
+| Extension | Shape | Contents |
+|---|---|---|
+| `PRIMARY` | no data | a header recording every setting of the run: the bin edges, the detector constants, which frames went in |
+| `FLUX` | (426, 1024) | the fitted mean flux of each pixel, in electrons per frame |
+| `FLUX_ERR` | (426, 1024) | the 1-sigma error on that flux, same units |
+| `HISTCUBE` | (16, 426, 1024) | the histograms: plane *b* holds, for each pixel, how many frames fell in bin *b* |
+| `HEADERS` | table | one row per input frame, one column per FITS keyword, so the timestamps survive |
+| `STAMP01`, `STAMP02`, ... | (64, 16, 16) | the raw, unbinned ADU values of every frame in a small box around each detected star |
+
+`chunk_summary.fits` holds the same flux maps stacked in time, `(15, 426, 1024)`,
+plus two tables: `CHUNKS` (which frames and which times each plane covers) and
+`TRACKS` (one row per star per chunk: position, aperture flux, error). Reading
+the light curves in Python:
+
+```python
+from astropy.io import fits
+from astropy.table import Table
+import matplotlib.pyplot as plt
+
+t = Table(fits.getdata('data_bin/chunk_summary.fits', 'TRACKS'))
+star = t[t['track'] == 0]                      # track 0 is the brightest star
+plt.errorbar(star['t_mid'], star['flux'], yerr=star['flux_err'], fmt='o-')
+plt.xlabel('time since the first frame [s]')
+plt.ylabel('flux [e-/frame]')
+plt.show()
+```
+
+---
+
+## Why chunks, and how to choose their size
+
+A histogram is built **per pixel**. It only means something if the star stayed
+on that pixel for the whole set of frames. Real fields drift: on the PESTO test
+sequence, about 0.16 pixel per second. Over 1000 frames (49 s) that is 7 pixels,
+so a histogram of the whole night smears every star across 7 pixels and tells
+you nothing about any of them.
+
+So the sequence is cut into consecutive chunks and each chunk is analysed on its
+own. `chunks.size` in the YAML sets how many frames go in a chunk:
+
+- **more frames per chunk** = more reads per pixel = a more precise flux, but
+  the star drifts further during the chunk and gets smeared;
+- **fewer frames per chunk** = the star stays put, but each flux is noisier.
+
+64 frames on the PESTO sequence is 3.1 s and about half a pixel of drift, which
+is a good compromise. Frames left over at the end are dropped, and the program
+says exactly how many: with 1001 frames and chunks of 64, you get 15 chunks
+using 960 frames, and 41 frames are dropped.
+
+---
+
+## Designing your own bins
+
+The bin edges shipped in `embin_config.yaml` are the optimum **for the PESTO
+constants above**. For any other detector or gain setting, compute your own:
+
+```bash
+python bin_optimizer.py --bias YOUR_BIAS --gain YOUR_GAIN --ron YOUR_RON \
+                        --sat YOUR_SATURATION --nbins 16 \
+                        --mu-min 1e-3 --mu-max 4 --scan
+```
+
+`--scan` also prints how good 4, 8, 12, 16, 24 and 32 bins would be, so you can
+see what a smaller histogram would cost you. Copy the printed edge list into
+`histogram.edges` in the YAML and you are done.
+
+The same thing from Python:
+
+```python
+from bin_optimizer import design_bins
+
+d = design_bins(bias=303.6178, gain=71.0598, ron=6.8164, saturation=5000,
+                nbins=16, mu_min=1e-3, mu_max=4.0)
+print(d.summary())        # every cut, in ADU, in electrons, in read-noise sigmas
+print(d.edge_list())      # the list to paste into the YAML
+print(d.worst_accuracy)   # 0.9943 -> these bins keep 99.4 % of the precision
+```
+
+Two rules that matter more than they look:
+
+- **Set the flux range to what your science needs, and no wider.** The design
+  protects the *worst* flux in the range you ask for, so asking for a range you
+  do not need makes every flux worse.
+- **Bin edges are whole ADU, and cuts through the read-noise peak are rounded
+  UP, never down.** Rounding down lets read noise leak into the bin that is
+  supposed to count electrons. For a detector with read noise below one ADU,
+  that single rounding decision can take the efficiency from 0.99 to 0.51.
+
+---
+
+## When something goes wrong
+
+| What you see | What it means |
+|---|---|
+| `no file matches .../data_night/*.fits` | the folder is empty or `input.directory` points at the wrong place |
+| `only 12 frame(s) found, which is fewer than one chunk of 64` | you have fewer frames than `chunks.size`; lower it |
+| `histogram.edges must be strictly increasing` | you edited the edge list and left two equal or out-of-order numbers |
+| `ModuleNotFoundError` | the virtual environment is not activated: run `source .venv/bin/activate` |
+| the flux map is all `0.0001` | that is `fit.mu_min`, the bottom of the search grid: the pixels really did see nothing, which is normal for background pixels over few frames |
+| every star sits at `fit.mu_max` | your flux grid stops below the real fluxes; raise `mu_max` |
+| stars look smeared or doubled in `chunk_flux_maps.pdf` | the field drifted too much inside one chunk: lower `chunks.size` |
+
+---
+
+## Repository map
+
+| File | What it is |
+|---|---|
+| `embin_config.yaml` | **the only file you edit.** Every setting, commented line by line |
+| `run_chunks.py` | a whole sequence, cut into chunks: the program you normally run |
+| `embin.py` | one set of frames -> one histogram cube + one flux map |
+| `bin_optimizer.py` | where the bin edges belong, and what they cost |
+| `emccd_histo.py` | the physical model and the maximum-likelihood flux fitter |
+| `demo_optimal_bins.py` | regenerates every figure and table of the PDF, including a Monte Carlo check |
+| `doc/optimal_bins.pdf` | the write-up: how many bins, where the cuts go, and why |
+| `docs/` | the project web page (password protected) |
+
+---
+
+## Credits and data
+
+The detector constants come from the `pesto_stats` calibration of the PESTO
+EMCCD at the Observatoire du Mont-Megantic: a full MCMC fit of the physical
+model to a source-free sky region.
+
+Raw frames are **not** in this repository, and should not be committed to it. A
+single sequence is close to a gigabyte, and it is observing data. `.gitignore`
+keeps `data_night/` and `data_bin/` out of git for exactly that reason.

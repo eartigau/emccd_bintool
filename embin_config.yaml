@@ -1,0 +1,277 @@
+# =============================================================================
+# embin_config.yaml -- the ONE file you edit to run this toolkit
+# =============================================================================
+#
+# READ THIS FIRST
+# ---------------
+# This file is read by BOTH programs of this repository:
+#
+#     python embin.py        -> one histogram cube + one flux map, from ONE set
+#                               of frames
+#     python run_chunks.py   -> a whole night, cut into chunks of frames, one
+#                               histogram cube + flux map per chunk, plus light
+#                               curves
+#
+# You do NOT need to edit any .py file to use them. Everything below is a
+# setting, and every setting is explained. If you change nothing at all, the
+# programs look for FITS frames in the folder `data_night/` and write their
+# results into the folder `data_bin/`.
+#
+# YAML rules, in case this is your first YAML file:
+#   * indentation is meaningful: keep exactly the same number of leading spaces
+#     you found on the line you are editing, and use spaces, never tabs;
+#   * `key: value` pairs, `#` starts a comment;
+#   * numbers with a decimal point or an exponent must be written like
+#     1.0e-4, NOT 1e-4 (a common cause of "why is this a string?" errors);
+#   * `null` means "not set".
+#
+# Every path below is resolved relative to THIS FILE's folder, not to the
+# folder you happen to be standing in when you launch python. So you can run
+#     python /somewhere/else/emccd_bintool/run_chunks.py
+# from anywhere and it still finds your data.
+# =============================================================================
+
+# -----------------------------------------------------------------------
+# 1. INPUT FRAMES -- where your raw data is
+# -----------------------------------------------------------------------
+input:
+  # The folder holding the individual raw frames of ONE acquisition sequence.
+  # One FITS file = one readout of the camera. Put your frames here (or change
+  # this line to point at wherever they already live).
+  directory: "data_night"
+
+  # Which files in that folder are frames. "*.fits" means every .fits file.
+  pattern: "*.fits"
+
+  # Frames are put in order by the LAST group of digits in their file name, so
+  # nc-image_2.fits comes before nc-image_10.fits (an alphabetical sort would
+  # get that wrong). `first_file` is the position of the first frame to use in
+  # that order, counting from ZERO, and `n_files` is how many frames to take
+  # from there.
+  #
+  #   first_file: 0,  n_files: 64    -> the first 64 frames
+  #   first_file: 64, n_files: 64    -> the next 64 frames
+  #   first_file: 0,  n_files: null  -> every frame in the folder
+  #
+  # These two only matter for embin.py. run_chunks.py ignores them and uses
+  # section 6 instead, because its whole job is to walk the sequence itself.
+  first_file: 0
+  n_files: 64
+
+  # Which HDU (extension) of each input file holds the image. PESTO frames put
+  # the image in the primary HDU, which is number 0. Leave this alone unless
+  # `python -c "from astropy.io import fits; fits.open('yourframe.fits').info()"`
+  # tells you the image is somewhere else.
+  hdu: 0
+
+# -----------------------------------------------------------------------
+# 2. HISTOGRAM BIN EDGES  [raw ADU]
+# -----------------------------------------------------------------------
+# WHAT A BIN IS HERE. For every pixel of the detector, this toolkit keeps a
+# histogram of the ADU values that pixel took across the frames: how many
+# frames had it between 0 and 314 ADU, how many between 314 and 321, and so on.
+# `edges` is the list of those boundaries. Nbin+1 edges define Nbin bins, so
+# the 17 numbers below define 16 bins.
+#
+# TWO CONVENTIONS, and the fitted physical model assumes both:
+#   * The LAST bin is OPEN-ENDED: every pixel value >= edges[-2] (here 1156)
+#     lands in it, however large. edges[-1] (here 1157) is therefore only a
+#     formal sentinel - it exists so that the list has Nbin+1 entries - and
+#     edges[-2] is the real "everything above this" threshold.
+#   * The FIRST bin absorbs the underflow: any value below edges[0] is counted
+#     in bin 0. Keep edges[0] at 0 so that never actually happens.
+#
+# WHERE THESE NUMBERS COME FROM. They are not a guess and not a round number
+# chosen by hand: they are the optimum computed by bin_optimizer.py for the
+# detector constants of section 3, over the flux range 1.0e-3 to 4 e-/frame:
+#
+#     from bin_optimizer import design_bins
+#     d = design_bins(bias=303.6178, gain=71.0598, ron=6.8164, saturation=5000,
+#                     nbins=16, mu_min=1.0e-3, mu_max=4.0)
+#     print(d.summary())
+#     d.edge_list()
+#
+# Worst-case Fisher information efficiency over that flux range: eta = 0.9887.
+# In plain words: these 16 numbers per pixel measure the flux to within 0.6% of
+# the precision you would get by keeping every single raw frame. The reasoning
+# is in doc/optimal_bins.pdf. The short version:
+#   * this detector has a large reduced read noise (r = RON/gain = 0.096), so
+#     TWO cuts are spent inside the read-noise peak to separate it from the
+#     single-electron shoulder;
+#   * the rungs above it are evenly spaced in sqrt((ADU - bias)/gain), which is
+#     the spacing that follows the widening of the EM-gain tail;
+#   * the last finite edge sits at 1156 ADU (about 12 electrons), NOT at the
+#     saturation level, because no read ever lands above it at these fluxes and
+#     a bin where nothing lands is a wasted bin.
+#
+# IF YOU CHANGE THE DETECTOR OR THE GAIN SETTING, these edges are wrong for
+# your data. Re-run bin_optimizer.py with your own constants and paste the new
+# list here. That is the whole point of the tool.
+histogram:
+  edges: [0, 314, 321, 328, 332, 360, 397, 444, 500, 565, 640, 725, 819, 922, 1034, 1156, 1157]
+
+  # For comparison only, do not use: 16 evenly spaced bins over the same range
+  # retain a small fraction of the information, because they waste almost every
+  # bin on the empty part of the range and none on the read-noise peak, which is
+  # where the signal actually is at these fluxes.
+  # edges: [0, 300, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000]
+
+# -----------------------------------------------------------------------
+# 3. DETECTOR CONSTANTS
+# -----------------------------------------------------------------------
+# These four numbers describe the camera. They are NOT fitted here: they come
+# from a separate calibration and are treated as known.
+#
+# The values below are for the PESTO EMCCD at Mont-Megantic, measured in the
+# `pesto_stats` project by fitting the full physical model (Poisson electrons
+# -> Gamma EM-gain amplification -> Gaussian read noise -> bias) to a
+# source-free sky region with an MCMC. They are the posterior medians:
+#     bias 303.6178 +/- 0.0022 ADU
+#     ron    6.8164 +/- 0.0016 ADU
+#     gain  71.0598 +/- 0.21   ADU/e-
+# An independent fit to an automatically segmented sky mask agrees to well
+# within a percent.
+detector:
+  bias: 303.6178      # ADU      -- electronics pedestal: what a pixel reads
+                      #             when it saw nothing at all
+  ron: 6.8164         # ADU      -- read-out noise, 1 sigma: the width of the
+                      #             peak around the bias
+  gain: 71.0598       # ADU/e-   -- mean EM gain: how many ADU one photo-electron
+                      #             turns into ON AVERAGE (the EM register is
+                      #             stochastic, so a single electron can read out
+                      #             anywhere from a few ADU to several hundred)
+  full_well: 5000     # ADU      -- saturation: the largest value a pixel can
+                      #             report. Sets the extent of the internal model
+                      #             grid and the top of the reference histogram.
+  nmax: 40            # electrons carried in the Poisson sum. Must be comfortably
+                      # above the brightest flux you expect; a bright star core
+                      # in the PESTO data reaches about 3 e-/frame, so 40 is ample.
+                      # Raising it costs computing time, lowering it below your
+                      # actual fluxes silently biases the fit.
+  cic: 0.0            # clock-induced charge [e-/frame]. Spurious electrons the
+                      # EM register creates by itself. The pesto_stats calibration
+                      # does not separate it from the sky flux, so it is left at 0
+                      # and whatever CIC exists is reported as part of the sky.
+
+# -----------------------------------------------------------------------
+# 4. FLUX FIT -- turning each pixel's histogram into a flux
+# -----------------------------------------------------------------------
+# For every pixel, the code computes the probability of that pixel's observed
+# histogram for each candidate flux on a grid, and keeps the flux that makes the
+# observation most likely (maximum likelihood). The grid below has to bracket
+# the true fluxes: a pixel brighter than mu_max cannot be fitted correctly, it
+# will just pile up at mu_max.
+fit:
+  enabled: true        # false -> write the histogram cube only, no flux map
+  mu_min: 1.0e-4       # e-/frame, bottom of the flux search grid
+  mu_max: 10.0         # e-/frame, top of the flux search grid
+  n_grid: 2000         # how many log-spaced grid points between the two. More
+                       # points = finer flux resolution and a slower fit.
+  chunk_size: 2048     # how many pixels are fitted per matrix multiplication.
+                       # Purely a memory/speed knob; lower it if you run out of
+                       # RAM, raise it if you have plenty.
+
+  # The error on the flux is ALWAYS written out (the FLUX_ERR extension): it is
+  # the half-width (MU_HI - MU_LO)/2 of the interval where the log-likelihood has
+  # dropped by 0.5 from its peak, which is the standard 1-sigma interval. At low
+  # flux that interval is genuinely lopsided, because a flux cannot be negative.
+  # Set this to true to ALSO keep the two raw bounds as their own extensions.
+  asymmetric_bounds: false
+
+# -----------------------------------------------------------------------
+# 5. SOURCES -- finding the stars and saving their raw pixels
+# -----------------------------------------------------------------------
+# Once the flux map exists, every star in it is located and a small square box
+# is cut around it. The FULL, ORIGINAL, unbinned ADU values of every frame
+# inside that box are saved, so each star's raw pixel-level time series survives
+# the histogram compression untouched.
+sources:
+  enabled: true
+  box_size: 16          # side of the square stamp, in pixels; the star sits at
+                        # its centre. Must be even.
+  detect_sigma: 8.0     # only sources standing this many sigma above the sky are
+                        # kept. Lower it to find fainter things (and more junk).
+  significance: error_map   # WHAT THE SIGMA IS DIVIDED BY. These are not two
+                        # estimates of one number, they are answers to two
+                        # different questions:
+                        #
+                        #   error_map   -- divide by the source's OWN error, taken
+                        #                  from FLUX_ERR and pushed through the
+                        #                  same filter. Answers "how well do I know
+                        #                  this star's flux?". This is the honest
+                        #                  measurement signal-to-noise, and the
+                        #                  stricter of the two. Default.
+                        #
+                        #   map_scatter -- divide by the overall scatter of the
+                        #                  filtered map (1.4826 x its median
+                        #                  absolute deviation). Answers the
+                        #                  classical detection question, "is there
+                        #                  anything here at all?". Always the more
+                        #                  generous of the two. Assumes the noise is
+                        #                  the same everywhere on the detector.
+  smooth_sigma: 1.0     # width [pixels] of the small Gaussian filter applied
+                        # BEFORE looking for peaks, a stand-in for the PSF, so a
+                        # single noisy pixel is not mistaken for a star. Positions
+                        # and fluxes are always read off the UNfiltered map.
+                        # 0 disables the filter.
+  min_separation: 8     # two peaks closer than this many pixels are treated as
+                        # the same star; only the stronger one is kept.
+  max_sources: 200      # at most this many stamps are written, brightest first.
+                        # null means no limit.
+
+# -----------------------------------------------------------------------
+# 6. CHUNKS -- only used by run_chunks.py
+# -----------------------------------------------------------------------
+# WHY CHUNKS EXIST. A histogram is built per PIXEL, so it only means something
+# if the star stayed on that pixel for the whole set of frames. Over a real
+# acquisition the field drifts (on the PESTO test sequence, about 0.16 pixel per
+# second), so histogramming a whole 1000-frame night at once smears every star
+# over several pixels and the answer is meaningless. run_chunks.py therefore
+# cuts the sequence into consecutive chunks of `size` frames and analyses each
+# chunk on its own.
+#
+# CHOOSING `size` is the usual exposure-time trade-off in a new disguise:
+#   * more frames per chunk  -> more reads per pixel -> a finer flux measurement,
+#     but the star drifts further during the chunk and gets smeared;
+#   * fewer frames per chunk -> the star stays put, but each flux is noisier.
+# On the PESTO sequence, 64 frames is 3.1 s and about half a pixel of drift.
+#
+# Frames left over at the end (the remainder of Nframes / size) are DROPPED, and
+# the program says so on screen. With 1001 frames and size 64 you get 15 chunks
+# of 64 = 960 frames used, 41 dropped.
+chunks:
+  size: 64              # frames per chunk
+  n_chunks: null        # how many chunks to process. null = as many complete
+                        # chunks as fit in the folder. Set a small number (2, 3)
+                        # the first time, to check everything works before
+                        # launching the full night.
+  aperture: 3.0         # radius [pixels] of the circle summed around each star
+                        # to build its light curve. Roughly the PSF radius.
+  match_radius: 4.0     # how far [pixels] a star is allowed to have moved from
+                        # one chunk to the next and still be recognised as the
+                        # same star. Must be larger than the drift per chunk and
+                        # smaller than the distance between neighbouring stars.
+  stamps: true          # false -> skip the raw postage stamps. The output files
+                        # get much smaller and the run gets faster, because the
+                        # frames then only have to be read once.
+  figures: true         # false -> skip the PDF figures at the end
+
+# -----------------------------------------------------------------------
+# 7. OUTPUT -- where the results are written
+# -----------------------------------------------------------------------
+# EVERYTHING this toolkit writes goes into `directory`, which is created if it
+# does not exist. Nothing is ever written next to your raw frames.
+#
+#   embin.py     writes  <directory>/<file>
+#   run_chunks.py writes <directory>/<chunk_prefix>00.fits, ...01.fits, ...
+#                        <directory>/<summary>
+#                        <directory>/<figures>/*.pdf
+output:
+  directory: "data_bin"            # the output folder
+  file: "embin_output.fits"        # embin.py's single result file
+  chunk_prefix: "embin_chunk"      # run_chunks.py's per-chunk files
+  summary: "chunk_summary.fits"    # run_chunks.py's stitched summary file
+  figures: "figures"               # sub-folder of `directory` for the PDF plots
+  overwrite: true                  # true -> silently replace an existing file of
+                                   # the same name. false -> stop with an error
+                                   # rather than overwrite anything.

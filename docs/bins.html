@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Why these bins</title>
+    <meta name="description" content="How many histogram bins an EMCCD flux measurement needs, and exactly where the cuts belong." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="passwordOverlay" class="password-overlay" aria-live="polite">
+      <div class="password-panel">
+        <p class="eyebrow">Restricted page</p>
+        <h2>Enter the project password</h2>
+        <form id="passwordForm">
+          <label class="sr-only" for="passwordInput">Password</label>
+          <input id="passwordInput" name="password" type="password" placeholder="Password" autocomplete="off" required />
+          <button type="submit">Unlock</button>
+        </form>
+        <p id="passwordError" class="error-message" hidden></p>
+        <p class="hint">If you are working on this project and do not have the password, ask Etienne.</p>
+      </div>
+    </div>
+
+    <div id="siteContent" class="site-content" hidden>
+      <div class="bg-orb orb-a"></div>
+      <div class="bg-orb orb-b"></div>
+
+      <div class="site-banner">
+        <div class="site-banner-inner">
+          <div class="site-banner-text">
+            <h2>EMCCD bin tool</h2>
+            <p>PESTO photon-counting &middot; per-pixel histograms &middot; flux maps and light curves</p>
+          </div>
+          <a href="https://eartigau.github.io/" class="home-link">&larr; Home</a>
+        </div>
+      </div>
+
+      <nav class="site-nav">
+        <a href="index.html">1. Start here</a>
+        <a href="outputs.html">2. Reading the results</a>
+        <a href="bins.html" class="current">3. Why these bins</a>
+      </nav>
+
+      <header class="hero">
+        <p class="eyebrow">Optimal histogram binning</p>
+        <h1>How many bins, and where</h1>
+        <p class="subtitle">
+          A histogram is the entire memory of this method, so the number of bins is the
+          parameter that matters. Here is how few you can get away with, where the
+          boundaries belong, and how much each choice costs you.
+        </p>
+      </header>
+
+      <main class="layout">
+        <!-- ─────────────────── the answer ──────────────────────────── -->
+        <section class="card span-3">
+          <h2>The answer first</h2>
+          <p class="lead">
+            For the PESTO EMCCD, over fluxes from 0.001 to 4 electrons per frame:
+          </p>
+          <ul>
+            <li><strong>8 bins already retain 98.1 %</strong> of the precision of keeping every single ADU value.</li>
+            <li><strong>16 bins retain 99.4 %</strong>, and that is what this toolkit ships with.</li>
+            <li><strong>16 <em>evenly spaced</em> bins retain 60 %.</strong> Same storage, two thirds of the precision thrown away. Where the cuts go matters far more than how many there are.</li>
+          </ul>
+          <div class="codeblock">edges: [0, 314, 321, 328, 332, 360, 397, 444, 500, 565, 640, 725, 819, 922, 1034, 1156, 1157]</div>
+          <p class="hint">
+            The last number is a formality: the top bin is open, and collects everything
+            at or above 1156 ADU.
+          </p>
+        </section>
+
+        <!-- ─────────────────── the measure ─────────────────────────── -->
+        <section class="card span-2">
+          <h2>What "retains 99.4 % of the precision" actually means</h2>
+          <p>
+            The detector digitises to whole ADU, so there is a natural reference: the
+            <em>full</em> histogram, one bin per ADU. Any coarser histogram is a merge of
+            neighbouring cells of that one, and merging can only lose information, never
+            create it. So the full histogram is a ceiling, and the question is how close to
+            it you can stay with 8 or 16 bins.
+          </p>
+          <p>
+            The measure is the <strong>Fisher information</strong> about the flux carried by
+            one read of one pixel. It says how sharply the likelihood peaks, and it sets the
+            best error any unbiased estimator can achieve on <em>N</em> reads:
+          </p>
+          <div class="codeblock">sigma_mu  =  1 / sqrt( N &times; I(mu) )</div>
+          <p>
+            Write <code>eta</code> for the ratio of the information carried by your K bins to
+            the information carried by the full histogram. Because the error goes as one over
+            the square root of the information, the error ratio is
+            <code>sqrt(eta)</code>, and that square root is what "99.4 % of the precision"
+            refers to. <code>eta = 0.9887</code> means your error bars are
+            <code>1/sqrt(0.9887) = 1.006</code> times larger than if you had kept every raw
+            frame. Six parts in a thousand, for a hundredfold reduction in storage.
+          </p>
+          <div class="callout">
+            <p>
+              This is a comparison against the best a <em>histogram</em> can do, not against a
+              perfect photon counter. The EM register's own randomness costs information that
+              no choice of bins can recover; it is present on both sides of the ratio.
+            </p>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>How many bins, for PESTO</h2>
+          <p class="hint">
+            Worst case over fluxes 0.001 to 4 e&minus;/frame. "Precision kept" is
+            <code>sqrt(eta)</code>: how large your error bars are compared with keeping
+            everything.
+          </p>
+          <div class="table-wrap">
+            <table class="data">
+              <tr><th>Bins</th><th>eta</th><th>Precision kept</th></tr>
+              <tr><td class="num">4</td><td class="num">0.8683</td><td class="num">93.2 %</td></tr>
+              <tr><td class="num">8</td><td class="num">0.9618</td><td class="num">98.1 %</td></tr>
+              <tr><td class="num">12</td><td class="num">0.9815</td><td class="num">99.1 %</td></tr>
+              <tr><td class="num"><strong>16</strong></td><td class="num"><strong>0.9887</strong></td><td class="num"><strong>99.4 %</strong></td></tr>
+              <tr><td class="num">24</td><td class="num">0.9940</td><td class="num">99.7 %</td></tr>
+              <tr><td class="num">32</td><td class="num">0.9959</td><td class="num">99.8 %</td></tr>
+            </table>
+          </div>
+          <p class="hint">
+            The curve flattens fast. Going from 16 to 32 bins doubles the storage to buy four
+            parts in a thousand. Going from 16 down to 4 loses seven percent of your
+            precision, which on a night of data is a great deal more than it sounds.
+          </p>
+        </section>
+
+        <!-- ─────────────────── where the cuts go ───────────────────── -->
+        <section class="card span-3">
+          <h2>Where the cuts go, and why</h2>
+          <p>
+            Write a pixel value in "gain units": <code>u = (ADU &minus; bias) / gain</code>, so
+            <code>u = 1</code> means one electron's worth of signal. Then the design has three
+            zones, and each exists for a reason you can see in the data.
+          </p>
+
+          <figure class="lecture-figure">
+            <img src="assets/bins_on_data.png" alt="The 16 bin edges drawn over the observed ADU histogram of 20 PESTO frames" />
+            <figcaption>
+              The 16 edges drawn on 8.7 million real PESTO pixel values (20 frames). Left: the
+              whole range. Right: the read-noise peak close up, where four edges sit within 18
+              ADU of one another. This is the figure <code>plot_bins.py</code> makes from your
+              own data.
+            </figcaption>
+          </figure>
+
+          <h3 class="step-title"><span class="step-number">1</span> Cuts through the read-noise peak</h3>
+          <p>
+            At these fluxes, the overwhelming majority of reads are pixels that saw
+            <em>nothing</em>: they land in a narrow Gaussian at the bias, of width the read
+            noise. Almost all of the flux information at low flux is in one single number:
+            what fraction of reads escaped that peak. So the first cut, placed just above the
+            peak, does nearly all of the work.
+          </p>
+          <p>
+            How many cuts the peak deserves depends on one dimensionless number, the
+            <strong>reduced read noise</strong> <code>r = read noise / gain</code>. For PESTO,
+            <code>r = 6.82 / 71.06 = 0.096</code>, which is large: a single electron amplified
+            by the EM register often produces less signal than a few sigma of read noise, so
+            the peak and the single-electron shoulder genuinely overlap. Cut too low and read
+            noise leaks in; cut too high and you throw away a third of your single electrons.
+            When neither leak can be made small, the remedy is to spend a second, third and
+            fourth bin <em>resolving</em> the overlap instead of discarding it. That is why
+            the PESTO design has edges at 314, 321, 328 and 332 ADU, all within the peak.
+          </p>
+
+          <h3 class="step-title"><span class="step-number">2</span> A ladder evenly spaced in <code>sqrt(u)</code></h3>
+          <p>
+            Above the peak, the distribution is a mixture of Gamma laws: an <em>n</em>-electron
+            event has mean <code>n</code> and width <code>sqrt(n)</code> in gain units. The
+            structure to be resolved therefore widens as <code>sqrt(u)</code>, and bins whose
+            widths follow that growth keep a constant resolving power all the way up the tail.
+            (This is the same reasoning that puts a square root at the heart of the
+            Anscombe transform.) The numerical optimum reproduces this without being told:
+            the PESTO rungs are evenly spaced in <code>sqrt(u)</code> to within a few percent,
+            over a range in <code>u</code> spanning more than a factor of ten.
+          </p>
+
+          <h3 class="step-title"><span class="step-number">3</span> One open bin at the top, placed where the counts stop</h3>
+          <p>
+            The last finite edge should <strong>not</strong> be put at saturation out of habit.
+            A bin where no read ever lands is a wasted bin. Since an <em>n</em>-electron event
+            reads out around <code>n &plusmn; sqrt(n)</code>, and <em>n</em> itself rarely
+            exceeds <code>mu + 3&thinsp;sqrt(mu)</code>, the top cut belongs at whichever is
+            smaller: saturation, or that. For PESTO the second one wins by a wide margin, so
+            the top cut sits at 1156 ADU (about 12 electrons) even though the pixel could
+            report up to 5000. Everything above lands in the open bin: on the test data, 39
+            values out of 27.9 million.
+          </p>
+        </section>
+
+        <!-- ─────────────────── the design table ────────────────────── -->
+        <section class="card span-2">
+          <h2>The 16 bins, cut by cut</h2>
+          <p class="hint">
+            <code>u = (ADU &minus; bias) / gain</code>, so <code>u = 1</code> is one electron.
+            Bin 0 absorbs everything below the first cut; bin 15 everything above the last.
+            The right-hand column is the fraction of real PESTO reads that lands in each bin.
+          </p>
+          <div class="table-wrap">
+            <table class="data">
+              <tr><th>Bin</th><th>From [ADU]</th><th>To [ADU]</th><th>u range</th><th>Reads</th></tr>
+              <tr><td class="num">0</td><td class="num">0</td><td class="num">314</td><td class="num">&minus;4.27 &ndash; 0.15</td><td class="num">92.834 %</td></tr>
+              <tr><td class="num">1</td><td class="num">314</td><td class="num">321</td><td class="num">0.15 &ndash; 0.25</td><td class="num">5.301 %</td></tr>
+              <tr><td class="num">2</td><td class="num">321</td><td class="num">328</td><td class="num">0.25 &ndash; 0.34</td><td class="num">0.691 %</td></tr>
+              <tr><td class="num">3</td><td class="num">328</td><td class="num">332</td><td class="num">0.34 &ndash; 0.40</td><td class="num">0.108 %</td></tr>
+              <tr><td class="num">4</td><td class="num">332</td><td class="num">360</td><td class="num">0.40 &ndash; 0.79</td><td class="num">0.363 %</td></tr>
+              <tr><td class="num">5</td><td class="num">360</td><td class="num">397</td><td class="num">0.79 &ndash; 1.31</td><td class="num">0.267 %</td></tr>
+              <tr><td class="num">6</td><td class="num">397</td><td class="num">444</td><td class="num">1.31 &ndash; 1.98</td><td class="num">0.189 %</td></tr>
+              <tr><td class="num">7</td><td class="num">444</td><td class="num">500</td><td class="num">1.98 &ndash; 2.76</td><td class="num">0.119 %</td></tr>
+              <tr><td class="num">8</td><td class="num">500</td><td class="num">565</td><td class="num">2.76 &ndash; 3.68</td><td class="num">0.066 %</td></tr>
+              <tr><td class="num">9</td><td class="num">565</td><td class="num">640</td><td class="num">3.68 &ndash; 4.73</td><td class="num">0.035 %</td></tr>
+              <tr><td class="num">10</td><td class="num">640</td><td class="num">725</td><td class="num">4.73 &ndash; 5.93</td><td class="num">0.016 %</td></tr>
+              <tr><td class="num">11</td><td class="num">725</td><td class="num">819</td><td class="num">5.93 &ndash; 7.25</td><td class="num">0.007 %</td></tr>
+              <tr><td class="num">12</td><td class="num">819</td><td class="num">922</td><td class="num">7.25 &ndash; 8.70</td><td class="num">0.003 %</td></tr>
+              <tr><td class="num">13</td><td class="num">922</td><td class="num">1034</td><td class="num">8.70 &ndash; 10.28</td><td class="num">0.001 %</td></tr>
+              <tr><td class="num">14</td><td class="num">1034</td><td class="num">1156</td><td class="num">10.28 &ndash; 12.00</td><td class="num">0.0003 %</td></tr>
+              <tr><td class="num">15</td><td class="num">1156</td><td class="num">open</td><td class="num">12.00 &ndash; inf</td><td class="num">0.0002 %</td></tr>
+            </table>
+          </div>
+          <p class="hint">
+            Bin 0 holds 93 % of all reads and bin 15 holds two parts in a million. That is not
+            a mistake: bins are not there to hold reads, they are there to hold
+            <em>information</em>, and the optimiser places them so each carries a comparable
+            share of it.
+          </p>
+        </section>
+
+        <section class="card">
+          <h2>Optimal versus evenly spaced</h2>
+          <p class="hint">
+            Precision kept, <code>sqrt(eta)</code>, at each true flux. Same 16 bins of storage
+            in both cases.
+          </p>
+          <div class="table-wrap">
+            <table class="data">
+              <tr><th>Flux [e&minus;/frame]</th><th>16 optimal</th><th>8 optimal</th><th>16 even</th></tr>
+              <tr><td class="num">0.001</td><td class="num">99.5 %</td><td class="num">98.7 %</td><td class="num">62.0 %</td></tr>
+              <tr><td class="num">0.016 (sky)</td><td class="num">99.5 %</td><td class="num">98.3 %</td><td class="num">60.2 %</td></tr>
+              <tr><td class="num">0.1</td><td class="num">99.5 %</td><td class="num">98.8 %</td><td class="num">61.2 %</td></tr>
+              <tr><td class="num">0.5</td><td class="num">99.5 %</td><td class="num">98.6 %</td><td class="num">70.3 %</td></tr>
+              <tr><td class="num">1.0</td><td class="num">99.5 %</td><td class="num">98.4 %</td><td class="num">79.2 %</td></tr>
+              <tr><td class="num">2.0</td><td class="num">99.5 %</td><td class="num">98.3 %</td><td class="num">89.5 %</td></tr>
+              <tr><td class="num">3.0</td><td class="num">99.5 %</td><td class="num">98.3 %</td><td class="num">94.2 %</td></tr>
+              <tr><td class="num">4.0</td><td class="num">99.4 %</td><td class="num">98.1 %</td><td class="num">96.5 %</td></tr>
+            </table>
+          </div>
+          <p class="hint">
+            Evenly spaced bins are worst exactly where this camera is used: at the sky level
+            they cost 40 % of your precision, because they spend every bin on the empty part
+            of the range and none on the read-noise peak, which is where the signal is.
+          </p>
+        </section>
+
+        <!-- ─────────────────── how it is computed ──────────────────── -->
+        <section class="card span-2">
+          <h2>How the optimum is found</h2>
+          <p>
+            Fisher information is a <em>sum over bins</em>, so the value of a set of bins is
+            the sum of a value that each bin has on its own. A quantity like that, over a
+            partition of an ordered line, can be maximised <strong>exactly</strong> by dynamic
+            programming: the best K-bin partition ending at a given edge is built from the best
+            (K&minus;1)-bin partition ending at each earlier edge. Restricted to a dense set of
+            candidate edge positions, the result is a global optimum, not a lucky local one.
+          </p>
+          <p>
+            One complication: the bins must be good over a <em>range</em> of fluxes, not at one
+            flux, and "the worst flux in the range" is not a sum over bins. That is handled by
+            solving a weighted version of the problem repeatedly, each time shifting weight
+            towards whichever flux is currently served worst. Forty rounds converge in about
+            two seconds.
+          </p>
+          <p>
+            The tool also fits an interpretable closed-form family (the three zones described
+            above, with the number of peak cuts and the ladder ends as free parameters) and
+            keeps whichever of the two wins. For PESTO at 16 bins the closed form wins, which
+            is a happy outcome: the edges you ship are ones you can explain in a sentence.
+          </p>
+          <div class="codeblock">python bin_optimizer.py --bias 303.6178 --gain 71.0598 --ron 6.8164 --sat 5000 \
+                        --nbins 16 --mu-min 1e-3 --mu-max 4 --scan</div>
+        </section>
+
+        <section class="card">
+          <h2>Two rules people get wrong</h2>
+          <div class="callout warn">
+            <p>
+              <strong>Set the flux range to what your science needs, and no wider.</strong> The
+              design protects the <em>worst</em> flux in the range you ask for, so asking for a
+              range you do not need makes every flux worse.
+            </p>
+          </div>
+          <div class="callout warn">
+            <p>
+              <strong>Cuts through the read-noise peak are rounded up, never down.</strong>
+              Edges are whole ADU because the detector is digitised, and rounding a cut down
+              towards the bias lets read noise leak into the bin that is supposed to be
+              counting electrons. On a detector with read noise below one ADU, that single
+              rounding decision can take <code>eta</code> from 0.99 to 0.51.
+            </p>
+          </div>
+          <p class="hint">
+            Also worth knowing: the bias, gain and read noise are treated as <em>known</em>
+            here. If you ever fit them jointly with the flux, the right object is a Fisher
+            matrix and the optimal bins move, generally towards resolving the peak more finely,
+            since that is where the bias and read noise are constrained.
+          </p>
+        </section>
+
+        <!-- ─────────────────── proof ───────────────────────────────── -->
+        <section class="card span-3">
+          <h2>Does a real fit actually deliver it?</h2>
+          <p>
+            Everything above is a Fisher-information calculation: it predicts the variance an
+            efficient estimator would reach. It does not, by itself, prove that a real
+            maximum-likelihood fit to a real 8-bin histogram gets there. That gap is closed
+            with simulated data: draw reads from the exact signal chain, bin the
+            <em>same</em> simulated reads under each design so no simulation noise enters the
+            comparison, fit each pixel, and measure the scatter over 1200 independent pixels.
+          </p>
+          <figure class="lecture-figure">
+            <img src="assets/fig5_montecarlo.png" alt="Simulated scatter of the flux estimate against the Cramer-Rao bound" />
+            <figcaption>
+              Simulated flux scatter against the theoretical bound (left) and precision kept,
+              simulated against predicted (right). The optimised design tracks its prediction
+              to better than one percent; equal-width bins track theirs too, at a much worse
+              level. Over the same simulations, 8 equal-width bins retain 44 % of the precision
+              at low flux, which is the practical cost of not designing the bins. From the
+              worked example in the PDF, whose detector has a much smaller reduced read noise
+              than PESTO.
+            </figcaption>
+          </figure>
+          <figure class="lecture-figure">
+            <img src="assets/fig1_bin_count.png" alt="Worst-case efficiency against number of bins, optimised versus equal-width" />
+            <figcaption>
+              Worst-case precision against the number of bins, optimised versus equal-width.
+              The optimised curve saturates almost immediately; equal-width bins never catch
+              up. Same worked example as above.
+            </figcaption>
+          </figure>
+          <p>
+            The full write-up, with every derivation, the Monte-Carlo tables and a second
+            detector worked through, is here:
+            <a href="assets/optimal_bins.pdf" target="_blank">optimal_bins.pdf</a>.
+          </p>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <p>
+          <a href="https://github.com/eartigau/emccd_bintool" target="_blank">Source on GitHub</a>
+          &middot;
+          <a href="https://eartigau.github.io/" target="_blank">More tools</a>
+        </p>
+      </footer>
+
+      <div id="lightbox" class="lightbox" hidden>
+        <button id="lightboxClose" class="lightbox-close" aria-label="Close" type="button">&times;</button>
+        <figure class="lightbox-figure">
+          <img id="lightboxImg" src="" alt="" />
+          <figcaption id="lightboxCaption"></figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <script src="gate.js"></script>
+    <script src="lightbox.js"></script>
+  </body>
+</html>

@@ -1,0 +1,11 @@
+# Raw frames: observing data, gigabytes of it. Never commit these.
+data_night
+data_night/
+
+# Everything the toolkit writes. Regenerable from the code plus the frames.
+data_bin/
+
+# Python leftovers
+.venv/
+__pycache__/
+*.pyc

@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>EMCCD bin tool</title>
+    <meta name="description" content="How to bin a night of PESTO EMCCD frames into per-pixel histograms and fluxes." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="passwordOverlay" class="password-overlay" aria-live="polite">
+      <div class="password-panel">
+        <p class="eyebrow">Restricted page</p>
+        <h2>Enter the project password</h2>
+        <form id="passwordForm">
+          <label class="sr-only" for="passwordInput">Password</label>
+          <input id="passwordInput" name="password" type="password" placeholder="Password" autocomplete="off" required />
+          <button type="submit">Unlock</button>
+        </form>
+        <p id="passwordError" class="error-message" hidden></p>
+        <p class="hint">If you are working on this project and do not have the password, ask Etienne.</p>
+      </div>
+    </div>
+
+    <div id="siteContent" class="site-content" hidden>
+      <div class="bg-orb orb-a"></div>
+      <div class="bg-orb orb-b"></div>
+
+      <div class="site-banner">
+        <div class="site-banner-inner">
+          <div class="site-banner-text">
+            <h2>EMCCD bin tool</h2>
+            <p>PESTO photon-counting &middot; per-pixel histograms &middot; flux maps and light curves</p>
+          </div>
+          <a href="https://eartigau.github.io/" class="home-link">&larr; Home</a>
+        </div>
+      </div>
+
+      <nav class="site-nav">
+        <a href="index.html" class="current">1. Start here</a>
+        <a href="outputs.html">2. Reading the results</a>
+        <a href="bins.html">3. Why these bins</a>
+      </nav>
+
+      <header class="hero">
+        <p class="eyebrow">EMCCD photon counting toolkit</p>
+        <h1>Bin a night, keep the physics</h1>
+        <p class="subtitle">
+          Turn a folder of raw PESTO frames into a flux map and light curves, keeping
+          16 numbers per pixel instead of one number per pixel per frame, and losing
+          0.6 % of the precision doing it.
+        </p>
+      </header>
+
+      <main class="layout">
+        <!-- ───────────────────────── what this is ───────────────────── -->
+        <section class="card span-3">
+          <h2>What this toolkit is, in one screen</h2>
+          <p class="lead">
+            There are two programs and one settings file. You edit the settings file.
+            You do not edit the programs.
+          </p>
+          <div class="codeblock">your frames  &rarr;  per-pixel histogram  &rarr;  flux map  &rarr;  stars  &rarr;  light curves</div>
+          <p>
+            An EMCCD read is <strong>not</strong> "the flux, plus a bit of noise". A pixel
+            that collected <em>n</em> photo-electrons during one frame reads out at
+          </p>
+          <div class="codeblock">bias  +  Gamma(n, gain)  +  Gaussian(0, read noise)</div>
+          <p>
+            The electron-multiplying register multiplies each electron by a
+            <em>random</em> amount, so the same <em>n</em> gives wildly different ADU
+            values from one frame to the next. Averaging the ADU values throws away most
+            of the information at the sub-electron fluxes these cameras are used at. What
+            carries the flux is the <strong>shape</strong> of each pixel's distribution of
+            ADU values, and that shape is what a histogram keeps.
+          </p>
+          <p>
+            So for every pixel this toolkit counts how many frames had that pixel between
+            0 and 314 ADU, how many between 314 and 321, and so on through 16 bins. Then it
+            asks, pixel by pixel, which mean flux makes those 16 counts most likely. That
+            fitted flux, in electrons per frame, is the output.
+          </p>
+          <div class="callout">
+            <p>
+              <strong>Where the 16 boundaries come from.</strong> They are not round numbers
+              picked by hand. They are computed, for this camera, to lose as little
+              information as a 16-bin histogram possibly can:
+              <a href="bins.html">page 3 explains how, and what it costs</a>.
+            </p>
+          </div>
+        </section>
+
+        <!-- ───────────────────────── the pieces ─────────────────────── -->
+        <section class="card span-2">
+          <h2>The files you will touch</h2>
+          <div class="table-wrap">
+            <table class="data">
+              <tr>
+                <th>File</th>
+                <th>What it is</th>
+              </tr>
+              <tr>
+                <td class="mono">embin_config.yaml</td>
+                <td><strong>The only file you edit.</strong> Every setting, explained line by line inside the file itself.</td>
+              </tr>
+              <tr>
+                <td class="mono">run_chunks.py</td>
+                <td>The program you normally run: a whole sequence, cut into chunks of frames.</td>
+              </tr>
+              <tr>
+                <td class="mono">embin.py</td>
+                <td>One set of frames &rarr; one histogram cube and one flux map. Used by the program above, and usable on its own.</td>
+              </tr>
+              <tr>
+                <td class="mono">plot_bins.py</td>
+                <td>Draws your bin edges on top of your own data, so you can see they land where the counts are.</td>
+              </tr>
+              <tr>
+                <td class="mono">bin_optimizer.py</td>
+                <td>Computes bin edges for a camera. Run it once per detector or gain setting.</td>
+              </tr>
+              <tr>
+                <td class="mono">data_bin/</td>
+                <td>Where every result is written. Created for you.</td>
+              </tr>
+            </table>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>The PESTO camera</h2>
+          <p class="hint">
+            Measured in the <em>pesto_stats</em> calibration by fitting the full physical
+            model to a source-free sky region. These are the numbers in section 3 of the
+            settings file.
+          </p>
+          <div class="stats-grid">
+            <div class="stat">
+              <div class="label">Bias</div>
+              <div class="value">303.6178 ADU</div>
+            </div>
+            <div class="stat">
+              <div class="label">Read noise</div>
+              <div class="value">6.8164 ADU</div>
+            </div>
+            <div class="stat">
+              <div class="label">EM gain</div>
+              <div class="value">71.0598 ADU/e&minus;</div>
+            </div>
+            <div class="stat">
+              <div class="label">Full well</div>
+              <div class="value">5000 ADU</div>
+            </div>
+            <div class="stat">
+              <div class="label">Sky flux</div>
+              <div class="value">0.016 e&minus;/frame</div>
+            </div>
+            <div class="stat">
+              <div class="label">Frame time</div>
+              <div class="value">48.97 ms</div>
+            </div>
+          </div>
+          <div class="callout warn">
+            <p>
+              These numbers are right <strong>for PESTO at the EM gain used in the test
+              sequence, and nothing else</strong>. Another camera, or the same camera at
+              another gain, needs its own calibration and its own bin edges.
+            </p>
+          </div>
+        </section>
+
+        <!-- ───────────────────────── install ────────────────────────── -->
+        <section class="card span-3">
+          <h2>Installing it, once</h2>
+          <p>
+            You need Python 3.9 or newer. Open a terminal and run these four commands, in
+            order. Each one is explained, because skipping the reason is how people end up
+            stuck.
+          </p>
+
+          <h3 class="step-title"><span class="step-number">1</span> Get the code</h3>
+          <div class="codeblock">git clone https://github.com/eartigau/emccd_bintool.git
+cd emccd_bintool</div>
+
+          <h3 class="step-title"><span class="step-number">2</span> Make a virtual environment</h3>
+          <p class="hint">
+            A virtual environment is a private copy of Python for this project. It means
+            the packages you install here cannot break anything else on your machine. The
+            command creates a folder called <code>.venv</code> inside <code>emccd_bintool</code>.
+          </p>
+          <div class="codeblock">python3 -m venv .venv</div>
+
+          <h3 class="step-title"><span class="step-number">3</span> Activate it</h3>
+          <p class="hint">
+            You must do this <strong>every time you open a new terminal</strong> to work on
+            this project. You know it worked when your prompt starts with
+            <code>(.venv)</code>. Nearly every "it says numpy is not installed" message
+            comes from having skipped this step in a fresh terminal.
+          </p>
+          <div class="codeblock">source .venv/bin/activate        # macOS and Linux
+.venv\Scripts\activate           # Windows PowerShell</div>
+
+          <h3 class="step-title"><span class="step-number">4</span> Install the packages</h3>
+          <div class="codeblock">pip install -r requirements.txt</div>
+
+          <h3 class="step-title"><span class="step-number">5</span> Check it works</h3>
+          <div class="codeblock">python bin_optimizer.py --bias 303.6178 --gain 71.0598 --ron 6.8164 --sat 5000 \
+                        --nbins 16 --mu-min 1e-3 --mu-max 4</div>
+          <p class="hint">
+            You should get a table of 16 bins and a line saying the worst-case efficiency is
+            about 0.989. If you get <code>ModuleNotFoundError</code> instead, step 3 or 4 did
+            not happen.
+          </p>
+        </section>
+
+        <!-- ───────────────────────── running ───────────────────────── -->
+        <section class="card span-3">
+          <h2>Running it on a night of data</h2>
+
+          <h3 class="step-title"><span class="step-number">1</span> Put your frames in <code>data_night</code></h3>
+          <p>
+            One FITS file per readout, which is how PESTO writes them:
+            <code>nc-image_0.fits</code>, <code>nc-image_1.fits</code>, and so on.
+          </p>
+          <div class="codeblock">mkdir data_night
+cp /wherever/your/frames/are/*.fits data_night/</div>
+          <p class="hint">
+            If the frames are big and you would rather not copy them, open
+            <code>embin_config.yaml</code> and point <code>input.directory</code> at where
+            they already live instead.
+          </p>
+
+          <h3 class="step-title"><span class="step-number">2</span> Look at where your bins land</h3>
+          <div class="codeblock">python plot_bins.py</div>
+          <p>
+            This writes <code>data_bin/figures/bins_on_data.pdf</code>. Open it. You should
+            see a tall narrow peak (the read noise, where most pixels sit because most
+            pixels see no electron at all in a given frame), a long tail to the right (the
+            amplified electrons), several bin edges cutting <em>through</em> the peak, and
+            the last edge sitting where the tail has died out. If your edges are instead
+            floating in an empty region, the detector constants do not match this data and
+            everything downstream will be wrong. Stop and fix that first.
+          </p>
+
+          <h3 class="step-title"><span class="step-number">3</span> Try two chunks before the whole night</h3>
+          <div class="codeblock">python run_chunks.py --n-chunks 2</div>
+          <p>
+            About 30 seconds per chunk. The program narrates what it is doing in colour:
+            green for progress, blue for a measured number, orange for something it skipped,
+            red if it is stopping. Read it, and check three things: it found your frames, the
+            sky level it reports is sensible (<code>0.016 e-/frame</code> on the PESTO test
+            sequence), and it found some stars.
+          </p>
+
+          <h3 class="step-title"><span class="step-number">4</span> Run the whole thing</h3>
+          <div class="codeblock">python run_chunks.py</div>
+          <p>
+            On the 1001-frame PESTO test sequence this takes about 3.5 minutes and produces
+            15 chunks. Everything lands in <code>data_bin/</code>.
+            <a href="outputs.html">Page 2 says what each file contains and how to open it.</a>
+          </p>
+        </section>
+
+        <!-- ───────────────────────── chunks ────────────────────────── -->
+        <section class="card span-2">
+          <h2>Why the night is cut into chunks</h2>
+          <p>
+            A histogram is built <strong>per pixel</strong>. It only means something if the
+            star stayed on that pixel for the whole set of frames.
+          </p>
+          <p>
+            Real fields drift. On the PESTO test sequence the field moves about 0.16 pixel
+            per second, so over the full 1000 frames (49 seconds) it moves 7 pixels. A
+            histogram of the whole night would smear every star across 7 pixels and tell you
+            nothing about any of them. That is why the sequence is cut into consecutive
+            chunks of <code>chunks.size</code> frames, each analysed on its own.
+          </p>
+          <p>Choosing the chunk size is the usual exposure-time trade-off wearing a new hat:</p>
+          <ul>
+            <li><strong>More frames per chunk</strong>: more reads per pixel, so a more precise flux, but the star drifts further during the chunk and smears.</li>
+            <li><strong>Fewer frames per chunk</strong>: the star stays put, but each flux is noisier.</li>
+          </ul>
+          <p>
+            64 frames on this sequence is 3.1 seconds and about half a pixel of drift, which
+            is a good compromise. Frames left over at the end are dropped, and the program
+            tells you how many: with 1001 frames and chunks of 64 you get 15 chunks using 960
+            frames, and 41 frames are dropped.
+          </p>
+        </section>
+
+        <section class="card">
+          <h2>The test night, in numbers</h2>
+          <p class="hint">What the toolkit measured on the 1001-frame PESTO sequence.</p>
+          <div class="stats-grid">
+            <div class="stat">
+              <div class="label">Chunks</div>
+              <div class="value">15 &times; 64 frames</div>
+            </div>
+            <div class="stat">
+              <div class="label">Frames dropped</div>
+              <div class="value">41</div>
+            </div>
+            <div class="stat">
+              <div class="label">Cadence</div>
+              <div class="value">3.13 s</div>
+            </div>
+            <div class="stat">
+              <div class="label">Stars tracked</div>
+              <div class="value">7</div>
+            </div>
+            <div class="stat">
+              <div class="label">Sky measured</div>
+              <div class="value">0.0159&ndash;0.0170</div>
+            </div>
+            <div class="stat">
+              <div class="label">Total drift</div>
+              <div class="value">+6.7, &minus;2.1 pix</div>
+            </div>
+          </div>
+          <p class="hint">
+            The sky the toolkit fits, 0.016 e&minus;/frame, agrees with the independent MCMC
+            calibration of the same data (0.0162 &plusmn; 0.0001). That agreement is the
+            cheapest sanity check you have; run it on your own data too.
+          </p>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <p>
+          <a href="https://github.com/eartigau/emccd_bintool" target="_blank">Source on GitHub</a>
+          &middot;
+          <a href="https://eartigau.github.io/" target="_blank">More tools</a>
+        </p>
+      </footer>
+    </div>
+
+    <script src="gate.js"></script>
+  </body>
+</html>
