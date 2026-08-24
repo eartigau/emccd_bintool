@@ -97,7 +97,7 @@ input:
 # Worst-case Fisher information efficiency over that flux range: eta = 0.9887.
 # In plain words: these 16 numbers per pixel measure the flux to within 0.6% of
 # the precision you would get by keeping every single raw frame. The reasoning
-# is in doc/optimal_bins.pdf. The short version:
+# is in the paper (see the README for where to find it). The short version:
 #   * this detector has a large reduced read noise (r = RON/gain = 0.096), so
 #     TWO cuts are spent inside the read-noise peak to separate it from the
 #     single-electron shoulder;

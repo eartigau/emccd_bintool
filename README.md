@@ -8,7 +8,11 @@ Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
 1. **`bin_optimizer.py`** answers the question *"how few numbers per pixel can I
    keep and still measure the flux properly?"* For an EMCCD it computes where
    the histogram bin edges belong, and how much precision a given number of bins
-   costs you. The full reasoning is in [`doc/optimal_bins.pdf`](doc/optimal_bins.pdf).
+   costs you. The full reasoning, with every derivation and the Monte-Carlo
+   validation, is the paper: *Sixteen Numbers per Pixel: Optimal Histogram
+   Binning for EMCCD Photon-Counting Flux Retrieval*, whose source and figure
+   scripts live in the `papier_histofit` directory of
+   [emccd_histo_fit](https://github.com/eartigau/emccd_histo_fit).
 
 2. **`embin.py` and `run_chunks.py`** apply that to a real night of PESTO data.
    They read a folder of raw frames and produce, for every pixel, a histogram of
@@ -394,8 +398,7 @@ Two rules that matter more than they look:
 | `emccd_histo.py` | the physical model and the maximum-likelihood flux fitter |
 | `run_pipeline.py` | the wrapper: binning, then astrometry, in one command |
 | `pesto_astrometry.py` | optional: solves the field and puts a WCS on the results |
-| `demo_optimal_bins.py` | regenerates every figure and table of the PDF, including a Monte Carlo check |
-| `doc/optimal_bins.pdf` | the write-up: how many bins, where the cuts go, and why |
+| `demo_optimal_bins.py` | a standalone demonstration of the whole argument, including a Monte Carlo check |
 | `docs/` | the project web page (password protected) |
 
 ---
