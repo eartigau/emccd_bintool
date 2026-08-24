@@ -275,3 +275,30 @@ output:
   overwrite: true                  # true -> silently replace an existing file of
                                    # the same name. false -> stop with an error
                                    # rather than overwrite anything.
+
+# -----------------------------------------------------------------------
+# 8. ASTROMETRY -- putting the flux maps on the sky (pesto_astrometry.py)
+# -----------------------------------------------------------------------
+# Only read by `pesto_astrometry.py`, which is a separate, optional step run
+# AFTER run_chunks.py. It solves the field with astrometry.net and writes a WCS
+# into chunk_summary.fits, so that every tracked star gets an RA and a Dec.
+#
+# The pixel scale is NOT a setting: 0.466 arcsec/px is a measured property of
+# PESTO on the OMM 1.6 m (Cadieux et al. 2022, AJ 164, 96), and it is hard-coded
+# in pesto_astrometry.py where it belongs. Change it there, not here, and only
+# if the instrument itself changed.
+astrometry:
+  target: "TOI-1452"      # resolved at SIMBAD to get a position to search
+                          # around, and propagated to the epoch of your frames
+                          # using its proper motion. Leave empty ("") to search
+                          # blind, which on a field this small is slow and often
+                          # fails: the Nuvu headers carry no pointing at all, so
+                          # the target name IS the pointing information.
+  search_radius_deg: 0.3  # how far from that position the true field centre is
+                          # allowed to be. 0.3 deg is generous for a pointed
+                          # observation. If this fails, the same position is
+                          # automatically retried with a 2 deg radius before
+                          # giving up.
+  gaia: true              # false -> skip the independent check against Gaia
+                          # DR3. Leave it on: it is what tells you the solution
+                          # is right rather than merely self-consistent.

@@ -4,3 +4,8 @@ scipy>=1.8
 astropy>=5.0
 pyyaml>=6.0
 matplotlib>=3.5
+
+# Only needed for pesto_astrometry.py, the optional astrometric step. Leave them
+# out and everything else in this toolkit still works.
+astrometry>=4.0     # pure-Python astrometry.net, no solve-field to install
+photutils>=1.10     # star detection (DAOStarFinder)

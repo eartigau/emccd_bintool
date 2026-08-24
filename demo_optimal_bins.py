@@ -8,7 +8,9 @@ It answers, end to end and with simulated data rather than theory alone:
 
   1. How many histogram bins does an EMCCD flux retrieval actually need?
   2. Where exactly do those bin edges go?
-  3. Does a real maximum-likelihood fit to those bins reach the accuracy the
+  3. How does that compare with classical thresholding (photon counting), given
+     the best threshold the method could possibly use?
+  4. Does a real maximum-likelihood fit to those bins reach the accuracy the
      Fisher-information calculation promises?
 
 Everything is driven by the detector constants at the top of ``main()`` (or by
@@ -22,6 +24,7 @@ figures/bins/fig2_where_the_cuts_go.pdf  the pixel-value PDF with the 8 cuts
 figures/bins/fig3_information.pdf   where the flux information sits in ADU
 figures/bins/fig4_efficiency.pdf    efficiency versus flux, several designs
 figures/bins/fig5_montecarlo.pdf    simulated sigma versus the Cramer-Rao bound
+figures/bins/fig6_thresholding.pdf  optimal thresholding, on its own best terms
 figures/bins/bin_design.json        the numbers, for the write-up
 """
 
@@ -71,6 +74,68 @@ def uniform_edges(det, K):
     e = np.linspace(max(0.0, det.bias - 3 * det.ron), sat, K)
     return np.unique(np.concatenate([[0], np.round(e).astype(np.int64),
                                      [sat + 1]]))[:K + 1]
+
+
+# ---------------------------------------------------------------------------
+# Thresholding: the two-bin competitor
+# ---------------------------------------------------------------------------
+def threshold_edges(det, cut):
+    """The two-bin design "below / at-or-above a single cut", in cell indices."""
+    return np.array([0, int(cut), int(round(det.sat_adu)) + 1], dtype=np.int64)
+
+
+def threshold_eta(det, P, D, i_ref, cuts=None):
+    """
+    eta(cut, mu) for every single-threshold design.
+
+    Row `a` of the returned array is the efficiency curve of a detector read
+    reduced to one bit: "did this pixel exceed cuts[a]?".  That bit is exactly
+    what classical EMCCD photon counting keeps, so the whole method lives in
+    this one table.
+    """
+    if cuts is None:
+        cuts = np.arange(max(1, int(det.bias - 8 * det.ron)),
+                         int(round(det.sat_adu)) + 1)
+    eta = np.array([bo.efficiency(threshold_edges(det, c), P, D, i_ref)
+                    for c in cuts])
+    return np.asarray(cuts), eta
+
+
+def threshold_study(det, P, D, i_ref, c_pc=5.0, cuts=None):
+    """
+    The three thresholding regimes worth putting next to a real bin design.
+
+    ``photon_counting``
+        one fixed cut at bias + ``c_pc`` sigma, placed to keep read noise out
+        of the counted population and for no other reason.  This is what
+        photon counting normally means in practice.
+    ``best_fixed``
+        the single cut that maximises the *worst* efficiency over the flux
+        range, i.e. thresholding tuned by the same max-min criterion the bin
+        design is tuned by.  The fair champion of the method.
+    ``envelope``
+        the best cut re-chosen at every flux.  Unreachable in practice (it
+        would need the answer in advance), so it is a ceiling on thresholding
+        itself rather than on any one implementation of it.
+
+    Returns a dict; efficiencies are eta, not sqrt(eta).
+    """
+    cuts, eta = threshold_eta(det, P, D, i_ref, cuts)
+    worst = eta.min(axis=1)
+    i_fix = int(np.argmax(worst))
+    i_env = np.argmax(eta, axis=0)
+    cut_pc = int(np.ceil(det.bias + c_pc * det.ron))
+    j_pc = int(np.searchsorted(cuts, cut_pc))
+    return {
+        'cuts': cuts,
+        'photon_counting': {'cut': cut_pc, 'eta': eta[j_pc],
+                            'sigma': c_pc},
+        'best_fixed': {'cut': int(cuts[i_fix]), 'eta': eta[i_fix],
+                       'sigma': float((cuts[i_fix] - det.bias) / det.ron),
+                       'u': float((cuts[i_fix] - det.bias) / det.gain)},
+        'envelope': {'eta': eta[i_env, np.arange(eta.shape[1])],
+                     'cut': cuts[i_env]},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +223,7 @@ def main():
     # --- detector under study -------------------------------------------
     BIAS, GAIN, RON, SAT, CIC = 1000.0, 5000.0, 30.0, 60000.0, 0.001
     MU_MIN, MU_MAX = 1e-3, 8.0
+    C_PC = 5.0            # the conventional photon-counting cut, in RON sigmas
 
     log('EMCCD optimal-binning demonstration', 'info')
     log(f'detector: bias={BIAS:g} ADU, G={GAIN:g} ADU/e-, RON={RON:g} ADU, '
@@ -170,6 +236,17 @@ def main():
     pn = bo.per_electron_cell_probs(det)
     p, dp, i_ref = bo.cell_model(det, mu, pn=pn)
     P, D = bo._prefix(p, dp)
+    thr = threshold_study(det, P, D, i_ref, c_pc=C_PC)
+    log(f'thresholding, {C_PC:g} sigma photon counting: cut '
+        f'{thr["photon_counting"]["cut"]} ADU, worst-case accuracy '
+        f'{100 * np.sqrt(thr["photon_counting"]["eta"].min()):.1f} %', 'value')
+    log(f'thresholding, best fixed cut: {thr["best_fixed"]["cut"]} ADU '
+        f'(bias + {thr["best_fixed"]["sigma"]:.1f} sigma = '
+        f'{thr["best_fixed"]["u"]:.2f} G), worst-case accuracy '
+        f'{100 * np.sqrt(thr["best_fixed"]["eta"].min()):.1f} %', 'value')
+    log(f'thresholding, best cut re-chosen at every flux: worst-case accuracy '
+        f'{100 * np.sqrt(thr["envelope"]["eta"].min()):.1f} % -- no single '
+        f'threshold can do better than this', 'value')
     log(f'reduced parameters: r = RON/G = {det.r:.4f}, '
         f'S = (sat-bias)/G = {det.S:.2f} e-', 'value')
 
@@ -330,6 +407,7 @@ def main():
     Pf, Df = bo._prefix(pf, dpf)
 
     curves = {
+        '1 threshold, best fixed cut': (threshold_edges(det, thr['best_fixed']['cut']), '#8E44AD', '-.'),
         '8 bins, optimal': (designs[8].cell_edges, CDESIGN, '-'),
         '16 bins, optimal': (designs[16].cell_edges, '#1F9D55', '-'),
         '4 bins, optimal': (designs[4].cell_edges, '#B07D2B', '--'),
@@ -350,6 +428,63 @@ def main():
     fig.savefig(os.path.join(FIGDIR, 'fig4_efficiency.pdf'))
     plt.close(fig)
     log('wrote fig4_efficiency.pdf', 'info')
+
+    # ================================================================
+    # 3b.  Against thresholding, on its own best terms
+    # ================================================================
+    log('step 3b: the same comparison against optimal thresholding', 'info')
+    thr_f = threshold_study(det, Pf, Df, iref_f, c_pc=C_PC)
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.4, 4.2),
+                             gridspec_kw={'width_ratios': [1.25, 1]})
+    ax = axes[0]
+    ax.semilogx(mu_fine,
+                100 * np.sqrt(bo.efficiency(designs[8].cell_edges, Pf, Df,
+                                            iref_f)),
+                '-', color=CDESIGN, lw=2.0, label='8 bins, optimal')
+    ax.fill_between(mu_fine, 100 * np.sqrt(thr_f['envelope']['eta']), 104,
+                    color='#8E44AD', alpha=0.07, lw=0)
+    ax.semilogx(mu_fine, 100 * np.sqrt(thr_f['envelope']['eta']), '-',
+                color='#8E44AD', lw=1.6,
+                label='1 threshold, best cut at each flux (ceiling)')
+    ax.semilogx(mu_fine, 100 * np.sqrt(thr_f['best_fixed']['eta']), '-.',
+                color='#8E44AD', lw=1.6,
+                label=f'1 threshold, best fixed cut '
+                      f'({thr_f["best_fixed"]["cut"]} ADU)')
+    ax.semilogx(mu_fine, 100 * np.sqrt(thr_f['photon_counting']['eta']), '--',
+                color='#B07D2B', lw=1.6,
+                label=rf'photon counting, ${C_PC:g}\sigma$ cut '
+                      f'({thr_f["photon_counting"]["cut"]} ADU)')
+    ax.axhline(95, color=CGREY, ls=':', lw=1.2)
+    ax.set_xlabel(r'true flux $\mu$  [e$^-$/read]')
+    ax.set_ylabel(r'$\sigma_{\rm full}/\sigma$  [%]')
+    ax.set_ylim(0, 104)
+    ax.set_title('one threshold versus eight bins', fontsize=10)
+    ax.legend(frameon=False, fontsize=8, loc='lower left')
+    ax.grid(alpha=0.25, lw=0.5)
+
+    ax = axes[1]
+    ax.loglog(mu_fine, (thr_f['envelope']['cut'] - det.bias) / det.gain, '-',
+              color='#8E44AD', lw=1.6, label='best cut at each flux')
+    ax.axhline((thr_f['best_fixed']['cut'] - det.bias) / det.gain, ls='-.',
+               color='#8E44AD', lw=1.2, label='best fixed cut')
+    ax.axhline((thr_f['photon_counting']['cut'] - det.bias) / det.gain, ls='--',
+               color='#B07D2B', lw=1.2, label=rf'${C_PC:g}\sigma$ cut')
+    ax.set_xlabel(r'true flux $\mu$  [e$^-$/read]')
+    ax.set_ylabel(r'cut position  $u=(x-\mathrm{bias})/G$')
+    ax.set_title('where the best threshold wants to sit', fontsize=10)
+    ax.annotate('counts single electrons', xy=(2.2e-3, 0.021), fontsize=8,
+                color='#8E44AD', va='top')
+    ax.annotate('gives up on them and\nmeasures the tail instead',
+                xy=(1.9, 2.6), fontsize=8, color='#8E44AD', va='bottom')
+    ax.legend(frameon=False, fontsize=8, loc='center left')
+    ax.grid(alpha=0.25, lw=0.5, which='both')
+
+    fig.suptitle('Thresholding compared with an optimal histogram', fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    fig.savefig(os.path.join(FIGDIR, 'fig6_thresholding.pdf'))
+    plt.close(fig)
+    log('wrote fig6_thresholding.pdf', 'info')
 
     # ================================================================
     # 4.  Monte Carlo: does a real fit deliver it?
@@ -441,6 +576,8 @@ def main():
     log(f'  simulated  worst-case accuracy of the 8-bin design : '
         f'{100 * ratio8.min():.1f} %', 'value')
     log(f'  8-bin edges [ADU]: {best.edge_list()}', 'value')
+    log(f'  best any threshold can do, worst case over the range : '
+        f'{100 * np.sqrt(thr_f["envelope"]["eta"].min()):.1f} %', 'value')
 
     payload = {
         'detector': {'bias': BIAS, 'gain': GAIN, 'ron': RON, 'saturation': SAT,
@@ -455,6 +592,21 @@ def main():
                           'method': designs[K].method}
                  for K in Ks},
         'uniform_scan': {str(K): float(u) for K, u in zip(Ks, unif)},
+        'thresholding': {
+            'mu_grid': [float(v) for v in mu_fine],
+            'photon_counting': {
+                'sigma': C_PC,
+                'cut': int(thr_f['photon_counting']['cut']),
+                'eta': [float(v) for v in thr_f['photon_counting']['eta']]},
+            'best_fixed': {
+                'cut': int(thr_f['best_fixed']['cut']),
+                'sigma': float(thr_f['best_fixed']['sigma']),
+                'u': float(thr_f['best_fixed']['u']),
+                'eta': [float(v) for v in thr_f['best_fixed']['eta']]},
+            'envelope': {
+                'cut': [int(v) for v in thr_f['envelope']['cut']],
+                'eta': [float(v) for v in thr_f['envelope']['eta']]},
+        },
         'design8': {'edges': best.edge_list(),
                     'u_edges': [float(v) for v in best.u_edges[:-1]],
                     'sigma_cuts': [float((e - BIAS) / RON)

@@ -180,6 +180,7 @@ plt.show()</div>
               <tr><td class="mono">FLUX, FLUX_ERR</td><td>The per-chunk flux and error maps, stacked: <code>(15, 426, 1024)</code> for the test sequence. Plane 0 is the first chunk in time.</td></tr>
               <tr><td class="mono">CHUNKS</td><td>One row per chunk: which frames it used, its start, middle and end time in seconds since the first frame, the sky level, how many stars were found.</td></tr>
               <tr><td class="mono">TRACKS</td><td>One row per star per chunk: which star (<code>track</code>), which chunk, the time, the position, the aperture flux and its error. <strong>This is the light curve table.</strong></td></tr>
+              <tr><td class="mono">VARSTAT</td><td>One row per star: the <strong>chi-square of its light curve against a constant flux</strong> (<code>chi2</code>, <code>dof</code>, <code>chi2_red</code>), the probability a non-variable star would scatter that much (<code>p_value</code>), the same thing as a Gaussian significance (<code>sigma</code>), and the scatter left over once the photon errors are removed (<code>excess_rms_pct</code>). This is the table that answers "is it really variable?".</td></tr>
             </table>
           </div>
 
@@ -192,10 +193,14 @@ print(t.colnames)
 # ['track', 'chunk', 't_mid', 'x', 'y', 'flux', 'flux_err', 'peak_flux', 'peak_err', 'signif']
 
 star = t[t['track'] == 0]            # track 0 is the brightest star
-plt.errorbar(star['t_mid'], star['flux'], yerr=star['flux_err'], fmt='o-')
+plt.errorbar(star['t_mid'], star['flux'], yerr=star['flux_err'], fmt='o')
 plt.xlabel('time since the first frame [s]')
 plt.ylabel('flux [e-/frame]')
-plt.show()</div>
+plt.show()
+
+# Is it actually variable?
+v = Table(fits.getdata('data_bin/chunk_summary.fits', 'VARSTAT'))
+print(v['track', 'chi2', 'dof', 'chi2_red', 'p_value', 'sigma'])</div>
           <p class="hint">
             A "track" is one star followed from chunk to chunk. Stars are matched between
             consecutive chunks by position, within <code>chunks.match_radius</code> pixels.
@@ -211,20 +216,27 @@ plt.show()</div>
           <figure class="lecture-figure">
             <img src="assets/chunk_lightcurves.png" alt="Aperture light curves of seven stars over fifteen chunks" />
             <figcaption>
-              <strong>chunk_lightcurves.pdf</strong> &mdash; one panel per tracked star, flux
-              against time, with the error bar the fit itself produced. On the test sequence
-              the scatter (4.8 to 11 %) is larger than the error bars (2.8 to 9.4 %), and the
-              stars do not all vary together, which is what atmospheric scintillation at a
-              3-second cadence looks like. Check your own: if the scatter is far larger than
-              the error bars <em>and</em> every star moves in step, you are looking at clouds,
-              not at your target.
+              <strong>chunk_lightcurves.pdf</strong>: one panel per tracked star, flux
+              against time, with the error bar the fit itself produced. <strong>The points are
+              not joined.</strong> A line drawn through independent chunk measurements invents
+              a trend the data does not contain, and it is exactly that invented trend the eye
+              reads as variability. The dashed line is the best constant flux, and the
+              <code>chi2/dof</code> in each panel header is measured against it.
+              <br /><br />
+              On the test sequence nothing reaches 5 sigma, so nothing here is variable. The
+              brightest star comes closest at <code>chi2/dof = 3.76</code> (4.6 sigma), with
+              4.7 % of scatter left over after the photon errors are removed, and the stars do
+              not move in step, which is what atmospheric scintillation at a 3-second
+              cadence looks like, not a variable star. Check your own the same way: an honest
+              detection needs a large <code>chi2/dof</code> <em>and</em> a pattern the other
+              stars in the field do not share.
             </figcaption>
           </figure>
 
           <figure class="lecture-figure">
             <img src="assets/chunk_drift.png" alt="Measured drift of the field in x and y over 45 seconds" />
             <figcaption>
-              <strong>chunk_drift.pdf</strong> &mdash; how far the field moved, measured
+              <strong>chunk_drift.pdf</strong>: how far the field moved, measured
               independently from every star. All the curves lie on top of one another, which
               is the point: this is the whole field moving (+6.7 pixels in x, &minus;2.1 in y
               over 45 s), not one star wandering. This figure is what justifies the chunk
@@ -236,12 +248,78 @@ plt.show()</div>
           <figure class="lecture-figure">
             <img src="assets/chunk_flux_maps.png" alt="The fitted flux map of each of the fifteen chunks" />
             <figcaption>
-              <strong>chunk_flux_maps.pdf</strong> &mdash; the fitted flux map of each chunk.
+              <strong>chunk_flux_maps.pdf</strong>: the fitted flux map of each chunk.
               The stars should look like stars: compact and round. If they are stretched into
               short streaks, the field drifted too far inside one chunk and
               <code>chunks.size</code> should come down.
             </figcaption>
           </figure>
+        </section>
+
+        <!-- ─────────────────── astrometry ──────────────────────────── -->
+        <section class="card span-3">
+          <h2>Putting it on the sky, and finding out what you are actually measuring</h2>
+          <p class="lead">
+            Everything above is in pixels. One optional step turns that into RA and Dec,
+            and it answers a question no amount of photometry can:
+            <strong>is this light curve one star, or two?</strong>
+          </p>
+          <div class="codeblock">pip install astrometry photutils      # one extra install, once
+python pesto_astrometry.py            # target name comes from embin_config.yaml</div>
+          <p>
+            It stacks all the chunks after taking the measured drift out, solves that with
+            astrometry.net, and then <strong>refits the WCS to Gaia DR3</strong>, using the
+            solver only to decide which detection is which catalogue star. The header it
+            writes is deliberately plain:
+          </p>
+          <ul>
+            <li><strong><code>RA---TAN</code> / <code>DEC--TAN</code>, no SIP.</strong> Over an
+              8-arcminute field a linear CD matrix is the whole story. The program does not
+              ask you to take that on faith: it prints what a quadratic and a cubic would
+              reach, next to how many free parameters each spends. On this data the CD matrix
+              gets 27 stars to 0.49&Prime; RMS and a cubic gets to 0.06&Prime;, but with 20
+              free parameters for 54 measurements, which is fitting the centroid noise, not
+              the optics.</li>
+            <li><strong><code>CRPIX</code> at the exact centre of the field</strong>,
+              <code>((nx+1)/2, (ny+1)/2)</code>, with <code>CRVAL</code> the sky position
+              there. Not wherever the solver happened to leave it.</li>
+            <li><strong>A measured pixel scale, which is not the published one.</strong> PESTO
+              is quoted at 0.466&Prime;/px (Cadieux et al. 2022); this sequence solves at
+              0.4547&Prime;/px, consistently, with log-odds above 100. Trust
+              <code>PIXSCALE</code> in your own header.</li>
+          </ul>
+
+          <figure class="lecture-figure">
+            <img src="assets/astrometry.png" alt="The solved PESTO field with Gaia DR3 overlaid, residuals, and a close-up of TOI-1452" />
+            <figcaption>
+              <strong>astrometry.pdf</strong>: blue circles are Gaia DR3, green crosses
+              are what was detected, and they land on each other. Bottom left: the residuals,
+              0.49&Prime; RMS, about one pixel. Bottom right is the panel that matters: what
+              looks like one tracked star at full scale is <em>two</em>, TOI-1452
+              (G&nbsp;=&nbsp;13.60) and TIC&nbsp;420112587 (G&nbsp;=&nbsp;13.83), 3.1&Prime;
+              apart and only partially resolved.
+            </figcaption>
+          </figure>
+
+          <p>
+            Afterwards every row of <code>TRACKS</code> carries an <code>ra</code> and a
+            <code>dec</code>, and the program says in words which light curve is your target:
+          </p>
+          <div class="codeblock">TOI-1452 lands at x = 645.6, y = 146.9 on the solved image
+-&gt; that is track 1, 1.14 arcsec away: this is the light curve of TOI-1452
+WARNING: 1 other Gaia source within 4.1 arcsec of the target, nearest at
+3.10 arcsec, against an aperture radius of 1.36 arcsec. It is outside the
+aperture, but only by a couple of PSF widths, so some of its light is in
+track 1 and the transit depth will be diluted.</div>
+          <div class="callout warn">
+            <p>
+              That warning is the reason to run this step at all. A tracked source is a
+              <em>detection</em>, not a star. Track 1 is the blend of TOI-1452 and its known
+              companion, so any transit depth measured from it, uncorrected, is too shallow.
+              The discovery paper hit exactly this and had to fall back on PSF fitting to
+              decide which of the two stars the transit came from.
+            </p>
+          </div>
         </section>
 
         <!-- ─────────────────── sanity checks ───────────────────────── -->
@@ -290,6 +368,10 @@ plt.show()</div>
       </main>
 
       <footer class="footer">
+        <p class="authors">
+          &Eacute;tienne Artigau &middot; Galina Sherren &middot; Ren&eacute; Doyon &middot; Jonathan St-Antoine<br />
+          <span class="hint">Universit&eacute; de Montr&eacute;al and Observatoire du Mont-M&eacute;gantic</span>
+        </p>
         <p>
           <a href="https://github.com/eartigau/emccd_bintool" target="_blank">Source on GitHub</a>
           &middot;

@@ -158,6 +158,75 @@ def link_tracks(per_chunk_sources, tol):
 
 
 # ---------------------------------------------------------------------------
+# Is the star actually variable?
+# ---------------------------------------------------------------------------
+def variability_stats(rows):
+    """
+    Test each light curve against the hypothesis "this star did not vary".
+
+    The null model is a single constant flux, fitted as the inverse-variance
+    weighted mean of the chunk fluxes.  Under that model
+
+        chi2 = sum_c (f_c - fbar)^2 / sigma_c^2
+
+    follows a chi-square law with n-1 degrees of freedom, so chi2/dof near 1
+    means the scatter is fully explained by the quoted photon errors and there
+    is nothing left to call variability.  A large chi2 means either the star
+    varied or the errors are underestimated, which is why the excess scatter is
+    reported alongside: it says HOW BIG the unexplained part is, in percent,
+    while the p-value says how sure we are that it is there at all.
+
+    Returns an astropy Table with one row per track.
+    """
+    from scipy.stats import chi2 as chi2_dist
+    from scipy.special import ndtri
+
+    tr = Table(rows) if not isinstance(rows, Table) else rows
+    out = []
+    for i in np.unique(tr['track']):
+        m = tr['track'] == i
+        f = np.asarray(tr['flux'][m], dtype=float)
+        e = np.asarray(tr['flux_err'][m], dtype=float)
+        good = np.isfinite(f) & np.isfinite(e) & (e > 0)
+        f, e = f[good], e[good]
+        n = f.size
+        if n < 2:
+            continue
+        w = 1.0 / e ** 2
+        fbar = float(np.sum(w * f) / np.sum(w))
+        chi2 = float(np.sum(((f - fbar) / e) ** 2))
+        dof = n - 1
+        red = chi2 / dof
+        # Survival function of the chi-square: the probability that a
+        # non-variable star of this brightness would scatter at least this much.
+        pval = float(chi2_dist.sf(chi2, dof))
+        # The same thing as a one-sided Gaussian significance, which is the
+        # number people actually want to quote.  Clipped so that a p-value that
+        # underflows to zero does not become an infinity.
+        sig = float(-ndtri(max(pval, 1e-300)))
+        rms = float(np.std(f, ddof=1))
+        # Scatter left over once the photon noise is taken out.  Negative under
+        # the root means the curve is quieter than its own error bars; report 0.
+        excess = float(np.sqrt(max(rms ** 2 - np.mean(e ** 2), 0.0)))
+        out.append({'track': int(i), 'n': n, 'flux_mean': fbar,
+                    'flux_rms': rms, 'median_err': float(np.median(e)),
+                    'chi2': chi2, 'dof': dof, 'chi2_red': red,
+                    'p_value': pval, 'sigma': sig,
+                    'rms_pct': 100 * rms / fbar if fbar > 0 else np.nan,
+                    'excess_rms_pct': 100 * excess / fbar if fbar > 0 else np.nan})
+    t = Table(out) if out else Table(
+        names=('track', 'n', 'flux_mean', 'flux_rms', 'median_err', 'chi2',
+               'dof', 'chi2_red', 'p_value', 'sigma', 'rms_pct',
+               'excess_rms_pct'),
+        dtype=(int, int, float, float, float, float, int, float, float, float,
+               float, float))
+    for col in ('flux_mean', 'flux_rms', 'median_err'):
+        if col in t.colnames:
+            t[col].unit = 'e-/frame'
+    return t
+
+
+# ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
 def write_summary(path, cfg, edges, chunks, flux_cube, err_cube, tracks,
@@ -184,6 +253,8 @@ def write_summary(path, cfg, edges, chunks, flux_cube, err_cube, tracks,
     hdr.append(('COMMENT', 'CHUNKS: which frames and which times each plane is.'), bottom=True)
     hdr.append(('COMMENT', 'TRACKS: one row per source per chunk - the light'), bottom=True)
     hdr.append(('COMMENT', 'curves, with positions, so drift is measurable too.'), bottom=True)
+    hdr.append(('COMMENT', 'VARSTAT: one row per track - chi2 of the light curve'), bottom=True)
+    hdr.append(('COMMENT', 'against a constant flux, and how significant it is.'), bottom=True)
 
     hdus = [fits.PrimaryHDU(header=hdr),
             fits.ImageHDU(data=flux_cube.astype(np.float32), name='FLUX'),
@@ -210,6 +281,7 @@ def write_summary(path, cfg, edges, chunks, flux_cube, err_cube, tracks,
 
     if tracks:
         hdus.append(fits.BinTableHDU(Table(tracks), name='TRACKS'))
+        hdus.append(fits.BinTableHDU(variability_stats(tracks), name='VARSTAT'))
 
     fits.HDUList(hdus).writeto(path, overwrite=overwrite)
     log(f'wrote {path} ({os.path.getsize(path) / 1e6:.1f} MB)', 'value')
@@ -227,6 +299,7 @@ def make_figures(figdir, chunks, tracks, flux_cube):
         t = np.array([c['index'] for c in chunks], dtype=float)
 
     tr = Table(tracks) if tracks else None
+    var = variability_stats(tr) if tr is not None else None
     paths = []
 
     # --- light curves ------------------------------------------------------
@@ -236,23 +309,45 @@ def make_figures(figdir, chunks, tracks, flux_cube):
         keep = keep[:8]
         if keep:
             fig, axes = plt.subplots(len(keep), 1, sharex=True,
-                                     figsize=(7.5, 1.6 * len(keep) + 0.8))
+                                     figsize=(7.5, 1.8 * len(keep) + 1.0))
             axes = np.atleast_1d(axes)
             for ax, i in zip(axes, keep):
                 m = tr['track'] == i
+                # Points only, no line between them: a line drawn through
+                # independent chunk measurements invents a trend the data does
+                # not contain, and it is exactly the trend the eye then reads
+                # as variability.  The chi2 below is what decides that.
                 ax.errorbar(tr['t_mid'][m], tr['flux'][m], yerr=tr['flux_err'][m],
-                            fmt='o-', ms=3.5, lw=1, capsize=2, color='C0')
-                f = np.asarray(tr['flux'][m], dtype=float)
-                rms = np.std(f) / np.mean(f) * 100 if np.mean(f) > 0 else np.nan
+                            fmt='o', ms=3.5, lw=0, elinewidth=1, capsize=2,
+                            color='C0')
+                v = var[var['track'] == i]
+                if len(v):
+                    v = v[0]
+                    ax.axhline(v['flux_mean'], color='C3', lw=1.0, ls='--',
+                               alpha=0.8)
+                    verdict = ('variable' if v['sigma'] >= 5
+                               else 'not significant')
+                    note = (f"track {i}  (x, y) = ({np.mean(tr['x'][m]):.0f}, "
+                            f"{np.mean(tr['y'][m]):.0f})   "
+                            f"rms {v['rms_pct']:.1f} %   "
+                            f"$\\chi^2$/dof {v['chi2_red']:.2f} "
+                            f"({v['chi2']:.1f}/{v['dof']:d})   "
+                            f"{v['sigma']:.1f}$\\sigma$: {verdict}")
+                else:
+                    note = (f"track {i}  (x, y) = ({np.mean(tr['x'][m]):.0f}, "
+                            f"{np.mean(tr['y'][m]):.0f})")
                 ax.set_ylabel('e$^-$/frame')
-                ax.text(0.985, 0.88,
-                        f"track {i}  (x, y) = ({np.mean(tr['x'][m]):.0f}, "
-                        f"{np.mean(tr['y'][m]):.0f})   rms {rms:.1f} %",
-                        ha='right', va='top', transform=ax.transAxes, fontsize=8)
+                # Above the axes, not inside them: with no connecting line the
+                # points spread over the full height and a floating label lands
+                # on top of them.
+                ax.set_title(note, fontsize=8, loc='left', pad=3)
                 ax.grid(alpha=0.25)
             axes[-1].set_xlabel('time since the first frame [s]')
-            axes[0].set_title(f'Aperture light curves, {chunks[0]["nframes"]}-frame chunks')
-            fig.tight_layout()
+            fig.suptitle(
+                f'Aperture light curves, {chunks[0]["nframes"]}-frame chunks'
+                '\n(dashed line: best constant flux; $\\chi^2$ is measured '
+                'against it)', fontsize=10)
+            fig.tight_layout(rect=(0, 0, 1, 0.97))
             p = os.path.join(figdir, 'chunk_lightcurves.pdf')
             fig.savefig(p)
             plt.close(fig)
@@ -300,7 +395,8 @@ def make_figures(figdir, chunks, tracks, flux_cube):
 
 
 # ---------------------------------------------------------------------------
-def main():
+def main(argv=None):
+    """Bin a whole sequence. `argv` lets a wrapper drive this without a shell."""
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[1],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -324,7 +420,7 @@ def main():
     ap.add_argument('--no-stamps', action='store_true',
                     help='skip the raw postage stamps: much smaller output, and the '
                          'frames are then read only once')
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     log(f'reading configuration from {args.config}')
     cfg = load_config(args.config)
@@ -448,6 +544,19 @@ def main():
                          'peak_flux': s['peak_flux'], 'peak_err': s['peak_err'],
                          'signif': s['signif']})
 
+    # Which of these light curves is actually saying something?
+    var = variability_stats(rows)
+    if len(var):
+        log('variability of each track, against a constant flux:', 'info')
+        for v in var:
+            level = 'value' if v['sigma'] >= 5 else 'warn'
+            log(f"  track {v['track']:2d}  <f> = {v['flux_mean']:8.4f} e-/frame  "
+                f"rms {v['rms_pct']:5.2f} %  chi2/dof = {v['chi2_red']:6.2f} "
+                f"({v['chi2']:.1f}/{v['dof']:d})  p = {v['p_value']:.2e}  "
+                f"{v['sigma']:5.1f} sigma"
+                + ('' if v['sigma'] >= 5 else '  -> consistent with constant'),
+                level)
+
     summary = os.path.join(outdir, summary_name)
     write_summary(summary, cfg, edges, chunks, flux_cube, err_cube, rows, aperture,
                   overwrite=overwrite)
@@ -455,7 +564,8 @@ def main():
     if flux_cube is not None and want_figures:
         make_figures(figdir, chunks, rows, flux_cube)
     log('done')
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

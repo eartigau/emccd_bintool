@@ -66,6 +66,7 @@
           <ul>
             <li><strong>8 bins already retain 98.1 %</strong> of the precision of keeping every single ADU value.</li>
             <li><strong>16 bins retain 99.4 %</strong>, and that is what this toolkit ships with.</li>
+            <li><strong>One threshold (classical photon counting) retains 98.5 % at the sky level, but never more than 80 % above 2 e&minus;/frame</strong>, whatever cut you pick. It is the right tool below one electron per frame and hits a hard wall above it.</li>
             <li><strong>16 <em>evenly spaced</em> bins retain 60 %.</strong> Same storage, two thirds of the precision thrown away. Where the cuts go matters far more than how many there are.</li>
           </ul>
           <div class="codeblock">edges: [0, 314, 321, 328, 332, 360, 397, 444, 500, 565, 640, 725, 819, 922, 1034, 1156, 1157]</div>
@@ -236,7 +237,7 @@
         </section>
 
         <section class="card">
-          <h2>Optimal versus evenly spaced</h2>
+          <h2>Optimal bins versus evenly spaced bins</h2>
           <p class="hint">
             Precision kept, <code>sqrt(eta)</code>, at each true flux. Same 16 bins of storage
             in both cases.
@@ -259,6 +260,113 @@
             they cost 40 % of your precision, because they spend every bin on the empty part
             of the range and none on the read-noise peak, which is where the signal is.
           </p>
+        </section>
+
+        <!-- ─────────────────── thresholding ────────────────────────── -->
+        <section class="card span-3">
+          <h2>Against photon counting: how good is one threshold?</h2>
+          <p>
+            The classical way to read an EMCCD keeps one bit per pixel per frame: did this
+            pixel cross a threshold, or not? Count the crossings, correct for the ones you
+            missed, and you have a flux. It is simple, it is fast, and for most of the range
+            this camera works in it is very nearly the best thing you can do. The honest
+            question is not whether thresholding is bad; it is where it stops being good.
+          </p>
+          <p>
+            "One threshold" is just the 2-bin case of everything on this page, so it can be
+            scored on exactly the same axis. Three versions are worth telling apart:
+          </p>
+          <ul>
+            <li><strong>Photon counting.</strong> A fixed cut at <code>bias + 5 sigma</code> =
+              338 ADU, placed to keep read noise out of the counted population and for no
+              other reason. This is what "photon counting" normally means.</li>
+            <li><strong>The best fixed cut.</strong> The single cut that protects the worst
+              flux in the range, tuned by the same criterion as the 16 bins. It lands at
+              387 ADU, more than one electron above the bias.</li>
+            <li><strong>The best cut at each flux.</strong> Re-chosen knowing the answer. Not
+              a method you can run, but a <em>ceiling</em>: no thresholding scheme can beat
+              this row.</li>
+          </ul>
+          <div class="table-wrap">
+            <table class="data">
+              <tr><th>Flux [e&minus;/frame]</th><th>Photon counting<br />(5 sigma, 338 ADU)</th><th>Best fixed cut<br />(387 ADU)</th><th>Best possible cut<br />(the ceiling)</th><th>16 optimal bins</th></tr>
+              <tr><td class="num">0.001</td><td class="num">95.8 %</td><td class="num">67.9 %</td><td class="num">98.8 %</td><td class="num">99.5 %</td></tr>
+              <tr><td class="num">0.016 (sky)</td><td class="num">92.4 %</td><td class="num">65.9 %</td><td class="num">98.5 %</td><td class="num">99.5 %</td></tr>
+              <tr><td class="num">0.1</td><td class="num">90.4 %</td><td class="num">66.3 %</td><td class="num">98.2 %</td><td class="num">99.5 %</td></tr>
+              <tr><td class="num">0.5</td><td class="num">89.5 %</td><td class="num">73.1 %</td><td class="num">95.7 %</td><td class="num">99.5 %</td></tr>
+              <tr><td class="num">1.0</td><td class="num">87.3 %</td><td class="num">78.5 %</td><td class="num">90.2 %</td><td class="num">99.5 %</td></tr>
+              <tr><td class="num">2.0</td><td class="num">77.8 %</td><td class="num">80.3 %</td><td class="num">80.3 %</td><td class="num">99.5 %</td></tr>
+              <tr><td class="num">3.0</td><td class="num">65.2 %</td><td class="num">74.7 %</td><td class="num">79.5 %</td><td class="num">99.5 %</td></tr>
+              <tr><td class="num">4.0</td><td class="num">52.3 %</td><td class="num">65.8 %</td><td class="num">79.6 %</td><td class="num">99.4 %</td></tr>
+              <tr><td class="num"><strong>worst of the range</strong></td><td class="num"><strong>52.3 %</strong></td><td class="num"><strong>65.6 %</strong></td><td class="num"><strong>79.6 %</strong></td><td class="num"><strong>99.4 %</strong></td></tr>
+            </table>
+          </div>
+
+          <h3 class="step-title"><span class="step-number">1</span> Below one electron per frame, a threshold is almost perfect</h3>
+          <p>
+            At the sky level the ceiling is 98.5 %, and an ordinary 5-sigma cut gets 92.4 % of
+            the way there. That is not luck. When almost every read is either zero or one
+            electron, the only thing that carries flux information is <em>how often a read
+            escaped the read-noise peak</em>, and how you subdivide what lies above the cut
+            adds nothing at all: the extra bins provably cancel. If your science lives
+            entirely below a tenth of an electron per frame, keep the threshold and keep the
+            simplicity; 16 bins buy you about one percent.
+          </p>
+
+          <h3 class="step-title"><span class="step-number">2</span> Above a few electrons, one bit runs into a wall at 80 %</h3>
+          <p>
+            The ceiling row does not keep falling: it settles at 79 to 80 % and stays there.
+            That number is not a property of PESTO. At high flux the pixel value becomes a
+            smooth distribution that simply shifts with the flux, and reducing any such
+            measurement to a single bit is the classical one-bit quantiser problem, whose
+            efficiency is exactly
+          </p>
+          <div class="codeblock">eta = 2 / pi = 0.6366        sqrt(eta) = 79.8 %</div>
+          <p>
+            Push the model out to 40 electrons per frame and the best threshold reproduces
+            0.6366 to four digits. So the missing fifth of the precision is not a badly chosen
+            cut, it is the price of the bit itself: one threshold cannot tell one electron
+            from two, and above a few electrons per frame that multiplicity <em>is</em> the
+            signal. The same conclusion was reached empirically by Harps&oslash;e et al.
+            (2012), who found threshold photon counting to be shot-noise limited
+            "up to fluxes of about one photon per pixel per readout".
+          </p>
+
+          <h3 class="step-title"><span class="step-number">3</span> A threshold asked to cover both regimes covers neither</h3>
+          <p>
+            Note that the best <em>fixed</em> cut, 387 ADU, is worse at the sky level
+            (65.9 %) than the naive 5-sigma cut (92.4 %). Asking one number to serve fluxes
+            from 0.001 to 4 e&minus;/frame forces it into a no-man's-land: the low-flux
+            optimum hugs the read-noise peak at about 320 ADU, the high-flux optimum sits
+            hundreds of ADU up in the EM tail, and there is nothing useful in between. Bins
+            do not have this problem, because they hold the low cut <em>and</em> the ladder at
+            the same time. That is the whole reason the design has more than one number in it.
+          </p>
+
+          <figure class="lecture-figure">
+            <img src="assets/fig6_thresholding.png" alt="Accuracy retained by a single threshold in three variants, against the eight-bin design" />
+            <figcaption>
+              Left: what one threshold retains, in its three variants, against an optimal
+              8-bin design. The shaded band above the ceiling curve cannot be reached by any
+              thresholding scheme. Right: where the best threshold wants to sit, in units of
+              one electron. Below about one electron per read it hugs the read-noise peak and
+              counts single electrons; above it, it abandons them and measures the tail
+              instead. The two regimes are two decades apart, which is why no fixed cut serves
+              both. From the worked example in the PDF, whose reduced read noise is much
+              smaller than PESTO's; the shape of the story is the same, the numbers on this
+              page are PESTO's.
+            </figcaption>
+          </figure>
+
+          <div class="callout">
+            <p>
+              The practical boundary, not a verdict: thresholding is the right tool below
+              roughly one electron per frame and costs almost nothing there. Above it, the
+              histogram is the right tool. A real PESTO field has sky at 0.016 and star cores
+              at several electrons per frame in the <em>same</em> frame, and one reduction has
+              to serve both, which is why this toolkit keeps 16 bins rather than 1 bit.
+            </p>
+          </div>
         </section>
 
         <!-- ─────────────────── how it is computed ──────────────────── -->
@@ -355,6 +463,10 @@
       </main>
 
       <footer class="footer">
+        <p class="authors">
+          &Eacute;tienne Artigau &middot; Galina Sherren &middot; Ren&eacute; Doyon &middot; Jonathan St-Antoine<br />
+          <span class="hint">Universit&eacute; de Montr&eacute;al and Observatoire du Mont-M&eacute;gantic</span>
+        </p>
         <p>
           <a href="https://github.com/eartigau/emccd_bintool" target="_blank">Source on GitHub</a>
           &middot;

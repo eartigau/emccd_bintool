@@ -714,3 +714,14 @@ table.data tr:last-child td {
 .callout p + p {
   margin-top: 8px;
 }
+
+/* ── Footer credits ─────────────────────────────────────────────────── */
+
+.footer .authors {
+  margin: 0 0 6px;
+  color: var(--text);
+}
+
+.footer .authors .hint {
+  font-size: 0.8rem;
+}

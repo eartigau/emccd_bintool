@@ -124,6 +124,10 @@
                 <td>Computes bin edges for a camera. Run it once per detector or gain setting.</td>
               </tr>
               <tr>
+                <td class="mono">pesto_astrometry.py</td>
+                <td>Optional last step: solves the field and puts RA/Dec on everything, so you know which light curve is your target. Needs two extra packages.</td>
+              </tr>
+              <tr>
                 <td class="mono">data_bin/</td>
                 <td>Where every result is written. Created for you.</td>
               </tr>
@@ -263,6 +267,17 @@ cp /wherever/your/frames/are/*.fits data_night/</div>
             15 chunks. Everything lands in <code>data_bin/</code>.
             <a href="outputs.html">Page 2 says what each file contains and how to open it.</a>
           </p>
+
+          <h3 class="step-title"><span class="step-number">5</span> Optional: put it on the sky</h3>
+          <div class="codeblock">pip install astrometry photutils
+python pesto_astrometry.py</div>
+          <p>
+            Solves the field, writes a plain TAN WCS with <code>CRPIX</code> at the centre of
+            the field and no SIP, and gives every tracked star an RA and a Dec. It then tells
+            you which light curve is your target, and warns you when it is really two
+            stars, which on the test night it is.
+            <a href="outputs.html">The details are on page 2.</a>
+          </p>
         </section>
 
         <!-- ───────────────────────── chunks ────────────────────────── -->
@@ -330,6 +345,10 @@ cp /wherever/your/frames/are/*.fits data_night/</div>
       </main>
 
       <footer class="footer">
+        <p class="authors">
+          &Eacute;tienne Artigau &middot; Galina Sherren &middot; Ren&eacute; Doyon &middot; Jonathan St-Antoine<br />
+          <span class="hint">Universit&eacute; de Montr&eacute;al and Observatoire du Mont-M&eacute;gantic</span>
+        </p>
         <p>
           <a href="https://github.com/eartigau/emccd_bintool" target="_blank">Source on GitHub</a>
           &middot;

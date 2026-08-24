@@ -1,6 +1,6 @@
 # emccd_bintool
 
-**Two things live in this repository.**
+**Three things live in this repository.**
 
 1. **`bin_optimizer.py`** answers the question *"how few numbers per pixel can I
    keep and still measure the flux properly?"* For an EMCCD it computes where
@@ -12,10 +12,16 @@
    the values that pixel took, then a fitted mean flux in electrons per frame,
    then the stars found in that flux map, then light curves.
 
+3. **`pesto_astrometry.py`** puts those flux maps on the sky: it solves the
+   field with astrometry.net, writes a plain TAN WCS (CRPIX at the centre of
+   the field, no SIP), and gives every tracked star an RA and a Dec, so you can
+   say which light curve is your target and whether anything is blended with
+   it. This step is optional and needs two extra packages.
+
 Everything is driven by one settings file, **`embin_config.yaml`**. You do not
 need to edit any Python file to use this toolkit.
 
-**Project page:** <https://eartigau.github.io/emccd_bintool/> &mdash; the same
+**Project page:** <https://eartigau.github.io/emccd_bintool/> gives the same
 material as this README, plus the figures, in three pages: how to run it, how to
 read the results, and why the bins are where they are. It asks for a password
 (`omm4ever`) so it stays a working document for the group rather than a
@@ -43,6 +49,13 @@ values throws away most of the information at the sub-electron fluxes these
 cameras are used at. The **shape** of a pixel's ADU distribution is what carries
 the flux, and 16 well-placed histogram bins capture 99.4 % of it, in 16 numbers
 per pixel instead of one number per pixel per frame.
+
+Classical photon counting, one threshold per read, is the 2-bin case of the same
+picture. It is nearly optimal below one electron per frame (98.5 % at the PESTO
+sky level) and then hits a hard ceiling: above a couple of electrons per frame no
+threshold, however well placed, retains more than 80 % of the precision, because
+one bit cannot tell one electron from two. The comparison, with numbers, is on
+the project page and in the PDF.
 
 ---
 
@@ -163,6 +176,8 @@ want it elsewhere).
 | `figures/chunk_lightcurves.pdf` | flux of every tracked star versus time |
 | `figures/chunk_drift.pdf` | how far the field moved during the sequence |
 | `figures/chunk_flux_maps.pdf` | the flux map of each chunk, side by side |
+| `astrometry_stack.fits` | only after `pesto_astrometry.py`: the stacked, solved image with its WCS |
+| `figures/astrometry.pdf` | only after `pesto_astrometry.py`: the solved field against Gaia |
 
 Each `embin_chunkNN.fits` is a multi-extension FITS file. Open it with
 
@@ -182,9 +197,11 @@ and you will see:
 | `STAMP01`, `STAMP02`, ... | (64, 16, 16) | the raw, unbinned ADU values of every frame in a small box around each detected star |
 
 `chunk_summary.fits` holds the same flux maps stacked in time, `(15, 426, 1024)`,
-plus two tables: `CHUNKS` (which frames and which times each plane covers) and
-`TRACKS` (one row per star per chunk: position, aperture flux, error). Reading
-the light curves in Python:
+plus three tables: `CHUNKS` (which frames and which times each plane covers),
+`TRACKS` (one row per star per chunk: position, aperture flux, error) and
+`VARSTAT` (one row per star: the chi-square of its light curve against a
+constant flux, the p-value, and the equivalent Gaussian significance, so you can
+tell a real variable from scintillation). Reading the light curves in Python:
 
 ```python
 from astropy.io import fits
@@ -193,11 +210,22 @@ import matplotlib.pyplot as plt
 
 t = Table(fits.getdata('data_bin/chunk_summary.fits', 'TRACKS'))
 star = t[t['track'] == 0]                      # track 0 is the brightest star
-plt.errorbar(star['t_mid'], star['flux'], yerr=star['flux_err'], fmt='o-')
+plt.errorbar(star['t_mid'], star['flux'], yerr=star['flux_err'], fmt='o')
 plt.xlabel('time since the first frame [s]')
 plt.ylabel('flux [e-/frame]')
 plt.show()
+
+# Is it really variable, or is that just noise?
+v = Table(fits.getdata('data_bin/chunk_summary.fits', 'VARSTAT'))
+print(v['track', 'chi2', 'dof', 'chi2_red', 'p_value', 'sigma'])
 ```
+
+The points are deliberately not joined by a line, in the figures and here: the
+chunks are independent measurements, and a line between them draws a trend the
+data does not contain. `chi2_red` near 1 means the scatter is entirely explained
+by the quoted photon errors, and there is nothing to report. On the PESTO test
+sequence the highest is 3.76 (4.6 sigma), which is scintillation, not a variable
+star: the stars do not vary in step, and none reaches 5 sigma.
 
 ---
 
@@ -220,6 +248,82 @@ own. `chunks.size` in the YAML sets how many frames go in a chunk:
 is a good compromise. Frames left over at the end are dropped, and the program
 says exactly how many: with 1001 frames and chunks of 64, you get 15 chunks
 using 960 frames, and 41 frames are dropped.
+
+---
+
+## Putting it on the sky (optional)
+
+`run_chunks.py` measures everything in pixels. To turn that into RA and Dec:
+
+```bash
+pip install astrometry photutils      # one extra install, once
+python pesto_astrometry.py            # target name comes from the YAML
+```
+
+or, to do both steps at once:
+
+```bash
+python run_pipeline.py                # bin the night, then solve it
+python run_pipeline.py --skip-binning # solve products that already exist
+```
+
+**The two steps are deliberately separate.** The binning knows nothing about
+the sky: it takes frames, builds one histogram per pixel and fits a flux, and
+none of that assumes the frames are pictures of a star field. The same code is
+meant to bin a spectrograph's detector, where the sources are echelle orders
+and there is no astrometric solution to be had at all. So `embin.py` and
+`run_chunks.py` stay pure, everything that needs the sky lives in
+`pesto_astrometry.py`, and `run_pipeline.py` is a wrapper that runs one after
+the other. If the astrometry fails, the binning products are still complete.
+
+The astrometry writes its solution into **every** product, not just the summary:
+each `embin_chunkNN.fits` gets the WCS in its primary header and in `FLUX`,
+`FLUX_ERR` and `HISTCUBE`. Every chunk keeps the same CD matrix and the same
+central `CRPIX`; only `CRVAL` moves, by that chunk's measured drift, because
+that is the only thing the drift actually changes. `HISTCUBE`'s third axis is
+labelled `CTYPE3 = 'BIN'`, so no WCS-aware reader invents a sky meaning for it.
+
+It stacks all the chunks after taking the measured drift out (the deepest image
+the sequence can make), solves that with astrometry.net, and then **refits the
+WCS to Gaia DR3** using the solver only to identify which star is which. What it
+writes is deliberately plain:
+
+- **`CTYPE = RA---TAN` / `DEC--TAN`, no SIP.** Over an 8-arcminute field a
+  linear CD matrix is the whole story. The program does not take that on faith:
+  it prints what a quadratic and a cubic would achieve, next to how many free
+  parameters each one spends. On the test sequence the CD matrix reaches
+  0.49 arcsec RMS on 27 stars and a cubic reaches 0.06, but with 20 free
+  parameters for 54 measurements, which is fitting the centroid noise.
+- **`CRPIX` at the exact centre of the field**, `((nx+1)/2, (ny+1)/2)`, with
+  `CRVAL` the sky position there. Not wherever the solver happened to leave it.
+- **The pixel scale is measured, and it is not the catalogue value.** PESTO is
+  published at 0.466 arcsec/px (Cadieux et al. 2022); this data solves at
+  0.4547, consistently and with log-odds above 100. Believe `PIXSCALE` in your
+  own header over the round number.
+
+Afterwards, `chunk_summary.fits` gains `ra`/`dec` columns on every row of
+`TRACKS`, and the program tells you in plain words which track is your target:
+
+```
+TOI-1452 lands at x = 645.6, y = 146.9 on the solved image
+-> that is track 1, 1.14 arcsec away: this is the light curve of TOI-1452
+WARNING: 1 other Gaia source within 4.1 arcsec of the target, nearest at
+3.10 arcsec, against an aperture radius of 1.36 arcsec. It is outside the
+aperture, but only by a couple of PSF widths, so some of its light is in
+track 1 and the transit depth will be diluted.
+```
+
+That warning is the point of the whole step. The 3.1-arcsec neighbour is
+TIC 420112587, TOI-1452's known companion, and any transit depth measured from
+track 1 without correcting for it is too shallow. `figures/astrometry.pdf` shows
+the solved field, the residuals against Gaia, and a close-up in which the pair
+is resolved.
+
+If your target is not TOI-1452, change `astrometry.target` in the YAML, or pass
+`--target NAME` / `--ra --dec`. The name is resolved at SIMBAD and moved to the
+epoch of your frames by its own proper motion; without a target the search is
+blind, which on a field this small is slow and often fails, since the Nuvu
+headers contain no pointing information at all.
 
 ---
 
@@ -285,13 +389,18 @@ Two rules that matter more than they look:
 | `embin.py` | one set of frames -> one histogram cube + one flux map |
 | `bin_optimizer.py` | where the bin edges belong, and what they cost |
 | `emccd_histo.py` | the physical model and the maximum-likelihood flux fitter |
+| `run_pipeline.py` | the wrapper: binning, then astrometry, in one command |
+| `pesto_astrometry.py` | optional: solves the field and puts a WCS on the results |
 | `demo_optimal_bins.py` | regenerates every figure and table of the PDF, including a Monte Carlo check |
 | `doc/optimal_bins.pdf` | the write-up: how many bins, where the cuts go, and why |
 | `docs/` | the project web page (password protected) |
 
 ---
 
-## Credits and data
+## Authors and credits
+
+Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
+(Universite de Montreal and Observatoire du Mont-Megantic).
 
 The detector constants come from the `pesto_stats` calibration of the PESTO
 EMCCD at the Observatoire du Mont-Megantic: a full MCMC fit of the physical
