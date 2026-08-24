@@ -3,6 +3,9 @@ bin_optimizer.py
 ================
 Optimal histogram binning for EMCCD photon-counting flux retrieval.
 
+Authors: Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
+         Universite de Montreal / Observatoire du Mont-Megantic
+
 Question answered
 -----------------
 Given a detector (bias, EM gain, read-out noise, saturation level) and a flux

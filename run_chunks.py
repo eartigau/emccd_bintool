@@ -3,6 +3,9 @@
 run_chunks.py -- walk a long EMCCD sequence in contiguous chunks of frames
 ==========================================================================
 
+Authors: Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
+         Universite de Montreal / Observatoire du Mont-Megantic
+
 WHAT THIS DOES
 --------------
 `embin.py` turns ONE set of frames into one per-pixel histogram cube and one

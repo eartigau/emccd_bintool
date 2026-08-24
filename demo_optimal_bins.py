@@ -4,6 +4,9 @@ demo_optimal_bins.py
 ====================
 Demonstration and Monte-Carlo proof for ``bin_optimizer.py``.
 
+Authors: Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
+         Universite de Montreal / Observatoire du Mont-Megantic
+
 It answers, end to end and with simulated data rather than theory alone:
 
   1. How many histogram bins does an EMCCD flux retrieval actually need?

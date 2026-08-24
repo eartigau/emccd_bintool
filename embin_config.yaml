@@ -2,6 +2,9 @@
 # embin_config.yaml -- the ONE file you edit to run this toolkit
 # =============================================================================
 #
+# Authors: Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
+#          Universite de Montreal / Observatoire du Mont-Megantic
+#
 # READ THIS FIRST
 # ---------------
 # This file is read by BOTH programs of this repository:

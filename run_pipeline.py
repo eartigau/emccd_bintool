@@ -3,6 +3,9 @@
 run_pipeline.py -- binning, then astrometry, in one command
 ===========================================================
 
+Authors: Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
+         Universite de Montreal / Observatoire du Mont-Megantic
+
 This is a WRAPPER. It contains no science of its own: it runs
 
     1. run_chunks.py       the binning, which knows nothing about the sky

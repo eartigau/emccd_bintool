@@ -3,6 +3,9 @@ emccd_histo.py
 ==============
 Core library for EMCCD histogram-based flux estimation.
 
+Authors: Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
+         Universite de Montreal / Observatoire du Mont-Megantic
+
 References
 ----------
 Harpsøe et al. 2012, A&A 537, A50  https://arxiv.org/abs/1111.2066

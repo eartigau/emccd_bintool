@@ -1,5 +1,8 @@
 # emccd_bintool
 
+Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
+(Universite de Montreal / Observatoire du Mont-Megantic)
+
 **Three things live in this repository.**
 
 1. **`bin_optimizer.py`** answers the question *"how few numbers per pixel can I

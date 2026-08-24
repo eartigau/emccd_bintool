@@ -8,6 +8,9 @@ solves the field with astrometry.net (through the pure-Python `astrometry`
 package, no external solve-field), writes a WCS into the products, and adds
 RA/Dec to every tracked star so you can say which of them is your target.
 
+Authors: Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
+         Universite de Montreal / Observatoire du Mont-Megantic
+
 It is the PESTO sibling of `cpapir_astrometry.py` (OMM 1.6 m / CPAPIR), and
 follows the same structure: detect stars, hint the solver with what is actually
 known about the camera, solve, then rebuild the header the way we want it. Four
