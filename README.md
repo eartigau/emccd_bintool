@@ -9,8 +9,8 @@ Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
    keep and still measure the flux properly?"* For an EMCCD it computes where
    the histogram bin edges belong, and how much precision a given number of bins
    costs you. The full reasoning, with every derivation and the Monte-Carlo
-   validation, is the paper: *Sixteen Numbers per Pixel: Optimal Histogram
-   Binning for EMCCD Photon-Counting Flux Retrieval*, whose source and figure
+   validation, is the paper: *Optimal Histogram Binning for EMCCD
+   Photon-Counting Flux Retrieval*, whose source and figure
    scripts live in the `papier_histofit` directory of
    [emccd_histo_fit](https://github.com/eartigau/emccd_histo_fit).
 
