@@ -3,8 +3,8 @@
 embin.py -- histogram-bin cubes and mean-flux maps from individual EMCCD frames
 ===============================================================================
 
-Authors: Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
-         Universite de Montreal / Observatoire du Mont-Megantic
+Authors: Étienne Artigau, Galina Sherren, René Doyon, Jonathan St-Antoine
+         Université de Montréal / Observatoire du Mont-Mégantic
 
 WHAT THIS DOES
 --------------

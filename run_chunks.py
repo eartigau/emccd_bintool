@@ -3,8 +3,8 @@
 run_chunks.py -- walk a long EMCCD sequence in contiguous chunks of frames
 ==========================================================================
 
-Authors: Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
-         Universite de Montreal / Observatoire du Mont-Megantic
+Authors: Étienne Artigau, Galina Sherren, René Doyon, Jonathan St-Antoine
+         Université de Montréal / Observatoire du Mont-Mégantic
 
 WHAT THIS DOES
 --------------

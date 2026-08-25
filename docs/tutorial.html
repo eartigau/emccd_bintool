@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>EMCCD bin tool &middot; tutorial</title>
+    <meta name="description" content="End-to-end tutorial: calibrate the detector, bin the night, solve the field, and fit every star including the blended pair." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="passwordOverlay" class="password-overlay" aria-live="polite">
+      <div class="password-panel">
+        <p class="eyebrow">Restricted page</p>
+        <h2>Enter the project password</h2>
+        <form id="passwordForm">
+          <label class="sr-only" for="passwordInput">Password</label>
+          <input id="passwordInput" name="password" type="password" placeholder="Password" autocomplete="off" required />
+          <button type="submit">Unlock</button>
+        </form>
+        <p id="passwordError" class="error-message" hidden></p>
+        <p class="hint">If you are working on this project and do not have the password, ask Etienne.</p>
+      </div>
+    </div>
+
+    <div id="siteContent" class="site-content" hidden>
+      <div class="bg-orb orb-a"></div>
+      <div class="bg-orb orb-b"></div>
+
+      <div class="site-banner">
+        <div class="site-banner-inner">
+          <div class="site-banner-text">
+            <h2>EMCCD bin tool</h2>
+            <p>PESTO photon-counting &middot; per-pixel histograms &middot; flux maps and light curves</p>
+          </div>
+          <a href="https://eartigau.github.io/" class="home-link">&larr; Home</a>
+        </div>
+      </div>
+
+      <nav class="site-nav">
+        <a href="index.html">1. Start here</a>
+        <a href="outputs.html">2. Reading the results</a>
+        <a href="bins.html">3. Why these bins</a>
+        <a href="tutorial.html" class="current">4. Tutorial: end to end</a>
+      </nav>
+
+            <header class="hero">
+        <p class="eyebrow">Tutorial</p>
+        <h1>From raw frames to a deblended light curve</h1>
+        <p class="subtitle">
+          The whole chain, in the order you actually run it: calibrate the detector from
+          your own frames, bin the night, put it on the sky, then fit every star at once
+          &mdash; including the pair 3.1&Prime; apart that no aperture can separate.
+        </p>
+      </header>
+
+      <main class="layout">
+
+        <section class="card span-3">
+          <h2>The pipeline has four steps, and you can see them</h2>
+          <p class="lead">
+            <span class="mono">run_pipeline.py</span> is a wrapper with no science of its
+            own. It runs four programs in dependency order and nothing else. Ask it what it
+            is about to do:
+          </p>
+          <div class="codeblock">python run_pipeline.py --list</div>
+          <div class="table-wrap">
+            <table class="data">
+              <tr><th>Step</th><th>Program</th><th>Turns this into that</th></tr>
+              <tr>
+                <td class="mono">calibrate</td>
+                <td class="mono">embin_mcmc.py</td>
+                <td>frames &rarr; bias, read noise, EM gain, sky flux, and the optimal bin edges. <strong>Not in the default chain</strong>, see below.</td>
+              </tr>
+              <tr>
+                <td class="mono">bin</td>
+                <td class="mono">run_chunks.py</td>
+                <td>frames &rarr; one histogram cube and one flux map per chunk</td>
+              </tr>
+              <tr>
+                <td class="mono">astrometry</td>
+                <td class="mono">pesto_astrometry.py</td>
+                <td>flux maps &rarr; the same, with a WCS, plus a drift-corrected stack</td>
+              </tr>
+              <tr>
+                <td class="mono">photometry</td>
+                <td class="mono">embin_psf.py</td>
+                <td>flux maps + stack &rarr; a flux per star per chunk, blends deconvolved</td>
+              </tr>
+            </table>
+          </div>
+          <p class="hint">
+            Each step fails independently, and that is the point. A failed astrometry
+            leaves the binning products complete and correct &mdash; they simply have no
+            WCS. A failed binning leaves the later steps with nothing to read.
+          </p>
+        </section>
+
+        <section class="card span-2">
+          <h2><span class="step-number">1</span><span class="step-title">Calibrate the detector from your own frames</span></h2>
+          <p>
+            Section 3 of the settings file holds four numbers the rest of the toolkit
+            treats as known. If you are on PESTO at the gain the defaults were measured at,
+            skip this. Otherwise, measure them:
+          </p>
+          <div class="codeblock">python embin_mcmc.py</div>
+          <p>
+            It pools the raw ADU of the first 64 frames over every pixel into one
+            histogram &mdash; 28 million values &mdash; and samples bias, read noise, EM gain
+            and the mean flux per pixel from it with <span class="mono">emcee</span>. The
+            model is the closed-form Poisson&ndash;Gamma&ndash;Gaussian law, with the
+            Poisson sum over electron number done exactly, so there is no
+            <span class="mono">nmax</span> truncation anywhere in the fit.
+          </p>
+          <p>
+            It writes <span class="mono">data_bin/mcmc_report.pdf</span>: a typeset report
+            with the posterior, the fit quality, the proposed bin edges, and the numbers
+            already formatted to paste into sections 2 and 3.
+          </p>
+          <div class="callout warn">
+            <p>
+              <strong>Nothing applies those numbers for you.</strong> The calibration is not
+              in the default chain because its output is not a file the other steps read:
+              it is text you paste into the YAML. Wiring it to edit the configuration behind
+              your back would silently change the calibration underneath every result you
+              had already produced.
+            </p>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>What the calibration found</h2>
+          <p class="hint">
+            On the test night, from 64 frames. Compare with the independent
+            <em>pesto_stats</em> calibration in section 3: bias 303.6178, RON 6.8164,
+            gain 71.0598.
+          </p>
+          <div class="stats-grid">
+            <div class="stat"><div class="label">Bias</div><div class="value">302.881 ADU</div></div>
+            <div class="stat"><div class="label">Read noise</div><div class="value">6.803 ADU</div></div>
+            <div class="stat"><div class="label">EM gain</div><div class="value">69.77 ADU/e&minus;</div></div>
+            <div class="stat"><div class="label">Flux per pixel</div><div class="value">0.01666 e&minus;/frame</div></div>
+          </div>
+          <div class="callout warn">
+            <p>
+              Quote the <strong>inflated</strong> error bars the report prints, not the
+              formal ones. With 28 million pixel values behind four parameters the formal
+              width is 10&#8315;&#8308; of each value, and no real EMCCD is a four-parameter
+              object at that precision: &chi;&sup2;/&nu; comes out at 49.
+            </p>
+          </div>
+        </section>
+
+        <section class="card span-3">
+          <h2><span class="step-number">2</span><span class="step-title">Bin the night, then put it on the sky</span></h2>
+          <p>
+            These two are the original pipeline and are covered in detail on
+            <a href="index.html">page 1</a> and <a href="outputs.html">page 2</a>. In one
+            command:
+          </p>
+          <div class="codeblock">python run_pipeline.py --skip photometry</div>
+          <p>
+            The binning writes one <span class="mono">embin_chunkNN.fits.gz</span> cube and
+            one <span class="mono">_flux.fits.gz</span> map per chunk, plus
+            <span class="mono">chunk_summary.fits</span>, which holds every chunk's flux
+            map and error map in one cube along with the times. The astrometry stacks those
+            chunks with the drift taken out, solves the stack against Gaia, and writes
+            <span class="mono">astrometry_stack.fits</span>.
+          </p>
+          <p class="hint">
+            Those two files &mdash; the summary and the stack &mdash; are exactly what the
+            photometry step reads. Nothing else.
+          </p>
+        </section>
+
+        <section class="card span-3">
+          <h2><span class="step-number">3</span><span class="step-title">Fit every star at once</span></h2>
+          <div class="codeblock">python run_pipeline.py --only photometry</div>
+          <p class="lead">
+            The old light curve summed a fixed aperture around each source. That works right
+            up to the moment two sources sit closer together than the aperture &mdash;
+            which is exactly this field. TOI&#8209;1452 has a companion 3.1&Prime; away,
+            about seven pixels, and no aperture wide enough to hold one of them excludes the
+            other.
+          </p>
+
+          <figure class="lecture-figure">
+            <img src="assets/psf_finder.png" alt="The deep stack with all 17 fitted stars circled and numbered" />
+            <figcaption>
+              <strong>psf_finder.pdf</strong>: every star the fit uses, circled and numbered
+              on the deep stack. The numbers are the <span class="mono">flux_NN</span>
+              columns of the output table, so star 7 in this chart is
+              <span class="mono">flux_07</span> there. Green is isolated, red is a member of
+              a blended pair, and the dashed box is the pair itself. The same information
+              goes into <span class="mono">psf_stars.reg</span>, which you can load straight
+              on top of the stack in DS9, and into
+              <span class="mono">psf_stars.yaml</span> with RA, Dec and the Gaia magnitude
+              of each.
+            </figcaption>
+          </figure>
+
+          <h3>How it works</h3>
+          <p>
+            Every star gets the same isotropic Moffat, normalised to unit volume so that the
+            coefficient multiplying it is the star's <strong>total</strong> flux in
+            e&minus;/frame &mdash; not a peak height and not the content of an aperture. The
+            fit runs in two stages, and they are not the same fit:
+          </p>
+          <ol>
+            <li>
+              <strong>On the deep stack.</strong> FWHM and &beta; shared, every star free in
+              position and flux. This fixes the reference positions and measures &beta;.
+            </li>
+            <li>
+              <strong>On each chunk.</strong> &beta; held at the stack value; the FWHM, a
+              rigid (d<em>x</em>, d<em>y</em>) shift of the whole field, and one flux per
+              star, all solved together against that chunk's own
+              <span class="mono">FLUX_ERR</span> map.
+            </li>
+          </ol>
+          <p>
+            Holding the shape and the positions makes the model <em>linear</em> in the
+            fluxes, so they come from a weighted linear solve rather than from the
+            optimiser. That is both faster and the whole reason the blend is not a problem.
+          </p>
+        </section>
+
+        <section class="card span-3">
+          <h2>The cross-term, explicitly</h2>
+          <p>
+            The stars are fitted <strong>together</strong>, not one after another. With the
+            shape fixed, the data is a sum of profiles, and the normal matrix of that linear
+            solve is
+          </p>
+          <div class="codeblock">(M&#7488; W M)&#8305;&#8342;  =  &sum;&#8346;  M&#8305;(p) M&#8342;(p) / &sigma;(p)&sup2;</div>
+          <p>
+            The off-diagonal element <em>jk</em> <strong>is</strong> the cross-term: the
+            noise-weighted overlap integral of one profile with the other. It is not
+            neglected and not approximated &mdash; it is a number the solve inverts. Two
+            things follow at no extra cost. The fluxes are the pair that jointly explains the
+            blended image, rather than each star's light plus a share of its neighbour's
+            wing. And the inverse of that same matrix is the covariance, so each error bar
+            already carries the penalty for not knowing exactly how the light was shared.
+          </p>
+
+          <figure class="lecture-figure">
+            <img src="assets/psf_blend.png" alt="Data, model and residual of the blended pair, plus the two components separated" />
+            <figcaption>
+              <strong>psf_blend.pdf</strong>: the blended pair on the deep stack. Left to
+              right &mdash; the data, the joint two-star model, the residual on a symmetric
+              scale. The residual panel is the test: a mis-shared deblend leaves a dipole
+              there, bright on one component and dark on the other, which no amount of
+              arguing about covariance matrices explains away. The last panel cuts along the
+              line joining the two stars and draws each fitted component on its own. Those
+              two dashed curves <em>are</em> the deblend.
+            </figcaption>
+          </figure>
+
+          <div class="stats-grid">
+            <div class="stat"><div class="label">Separation</div><div class="value">3.120&Prime;</div></div>
+            <div class="stat"><div class="label">In FWHM</div><div class="value">2.25</div></div>
+            <div class="stat"><div class="label">Error inflation</div><div class="value">&times;1.00031</div></div>
+            <div class="stat"><div class="label">Flux correlation</div><div class="value">&minus;0.024</div></div>
+          </div>
+          <p class="hint">
+            That is small, and it is the right answer: at 2.25 FWHM a Moffat has already
+            fallen a long way. The value of doing it this way is not that the correction is
+            large &mdash; it is that the size of the correction is now a measured number in
+            the output rather than an assumption in a footnote. The full per-chunk
+            correlation matrix is in the <span class="mono">FLUXCORR</span> extension.
+          </p>
+        </section>
+
+        <section class="card span-2">
+          <h2>Why &beta; is measured once and then frozen</h2>
+          <p>
+            &beta; sets how heavy the wings of the profile are, and the wings are exactly
+            where a 64-frame chunk has nothing to say. At a sky flux of 0.017 e&minus;/frame,
+            a pixel a few FWHM from a star collects well under one electron in a whole chunk:
+            its flux estimate is noise-dominated and biased low, because the per-pixel
+            likelihood barely turns over.
+          </p>
+          <p>
+            A free &beta; reads that bias as a genuinely narrow-winged PSF and runs away. It
+            is not a subtle failure &mdash; fitted freely on this dataset, &beta; hit its
+            upper bound of 30 in <strong>ten chunks out of fifteen</strong>, with &chi;&sup2;
+            still falling monotonically all the way there. That is the signature of a
+            parameter the data cannot determine, not of a measurement.
+          </p>
+          <p>
+            So &beta; is measured on the deep stack, which has fifteen times the frames and
+            real signal in the wings, and reused. It is a property of the optics and the
+            atmosphere, and it has no reason to change over 45 seconds anyway.
+          </p>
+          <div class="codeblock"># let it float per chunk anyway, and watch it rail
+psf:
+  beta_free: true</div>
+          <p class="hint">
+            With <span class="mono">beta_free</span> on, a per-chunk &beta; that lands on a
+            bound is reported with a NaN error bar, so the failure is visible rather than
+            silent.
+          </p>
+        </section>
+
+        <section class="card">
+          <h2>What comes out</h2>
+          <div class="stats-grid">
+            <div class="stat"><div class="label">Stack seeing</div><div class="value">1.387&Prime;</div></div>
+            <div class="stat"><div class="label">Per-chunk FWHM</div><div class="value">1.07&ndash;1.30&Prime;</div></div>
+            <div class="stat"><div class="label">Moffat &beta;</div><div class="value">3.799 &plusmn; 0.078</div></div>
+            <div class="stat"><div class="label">Stars fitted</div><div class="value">17</div></div>
+          </div>
+          <p class="hint">
+            The per-chunk FWHM is consistently <em>sharper</em> than the stack, which is as
+            it should be: the stack is the sum of chunks offset by the drift, so it is
+            blurred by exactly the motion the fit measures. If it were not, something would
+            be wrong with the alignment.
+          </p>
+        </section>
+
+        <section class="card span-3">
+          <h2>The files the photometry writes</h2>
+          <div class="table-wrap">
+            <table class="data">
+              <tr><th>File</th><th>What it is</th></tr>
+              <tr>
+                <td class="mono">psf_report.pdf</td>
+                <td>The typeset report: method, the blend, why &beta; is frozen, the star table, the chunk table, and how to read the output.</td>
+              </tr>
+              <tr>
+                <td class="mono">psf_photometry.fits</td>
+                <td><span class="mono">PHOT</span>: one row per chunk. <span class="mono">STARS</span>: the star list. <span class="mono">FLUXCORR</span>: the per-chunk flux&ndash;flux correlation matrices.</td>
+              </tr>
+              <tr>
+                <td class="mono">psf_photometry.ecsv</td>
+                <td>The same table as plain text with units, openable in any editor.</td>
+              </tr>
+              <tr>
+                <td class="mono">psf_stars.reg</td>
+                <td>DS9 regions in image coordinates, one numbered circle per star, red for the blended pair.</td>
+              </tr>
+              <tr>
+                <td class="mono">psf_stars.yaml</td>
+                <td>One block per star: pixel position, RA, Dec, Gaia <em>G</em>, median flux, scatter, and who it is blended with.</td>
+              </tr>
+              <tr>
+                <td class="mono">figures/psf_finder.pdf</td>
+                <td>The finder chart above.</td>
+              </tr>
+              <tr>
+                <td class="mono">figures/psf_blend.pdf</td>
+                <td>The deblend cutout above.</td>
+              </tr>
+              <tr>
+                <td class="mono">figures/psf_photometry.pdf</td>
+                <td>FWHM, drift and light curves against time.</td>
+              </tr>
+            </table>
+          </div>
+
+          <div class="codeblock">from astropy.table import Table
+t = Table.read('data_bin/psf_photometry.ecsv')
+t['t_mid', 'fwhm', 'flux_01', 'flux_err_01']</div>
+
+          <figure class="lecture-figure">
+            <img src="assets/psf_lightcurves.png" alt="FWHM, field drift and normalised light curves against time" />
+            <figcaption>
+              <strong>psf_photometry.pdf</strong>. Top: the fitted FWHM, chunk by chunk.
+              Middle: the rigid shift &mdash; the field drifting +6.5 px in <em>x</em> and
+              &minus;2 px in <em>y</em> over 45 s. That curve being smooth and monotonic is
+              the check that the shift is tracking the telescope rather than chasing noise.
+              Bottom: the light curves of the brightest stars, each normalised to its own
+              median.
+            </figcaption>
+          </figure>
+
+          <div class="callout warn">
+            <p>
+              &chi;&sup2;/&nu; sits near <strong>0.79</strong> in every chunk. That is not a
+              good fit, it is a conservative error map:
+              <span class="mono">FLUX_ERR</span> overestimates the noise by about 12&nbsp;%.
+              Both versions of the flux error are written out &mdash; the formal one straight
+              from the error map, and <span class="mono">flux_err_scaled_NN</span> rescaled
+              so this fit's &chi;&sup2; comes out at one. Which to believe is a judgement
+              about the flux map, not about this fit.
+            </p>
+          </div>
+        </section>
+
+        <section class="card span-3">
+          <h2>Recipes</h2>
+          <div class="codeblock"># the usual run: bin, solve, measure
+python run_pipeline.py
+
+# a two-chunk trial before committing to the night
+python run_pipeline.py --n-chunks 2
+
+# the detector changed: calibrate first, then paste and re-run
+python run_pipeline.py --only calibrate
+#   ... edit sections 2 and 3 of embin_config.yaml ...
+python run_pipeline.py
+
+# only re-do the photometry, keeping the bins and the WCS
+python run_pipeline.py --only photometry
+
+# everything except the astrometry (no internet, sparse field)
+python run_pipeline.py --skip astrometry --skip photometry
+
+# what would run, without running it
+python run_pipeline.py --list</div>
+          <p class="hint">
+            Options are forwarded only to the step they belong to, so a mistyped flag is an
+            error in the wrapper rather than something silently ignored three modules down.
+            <span class="mono">python run_pipeline.py --help</span> lists all of them, with
+            the step table at the bottom.
+          </p>
+        </section>
+      </main>
+
+
+
+      <footer class="footer">
+        <p class="authors">
+          <a href="https://orcid.org/0000-0003-3506-5667" target="_blank" rel="noopener">&Eacute;tienne Artigau</a> &middot; <a href="https://orcid.org/0009-0006-5677-3944" target="_blank" rel="noopener">Galina Sherren</a> &middot; <a href="https://orcid.org/0000-0001-5485-4675" target="_blank" rel="noopener">Ren&eacute; Doyon</a> &middot; Jonathan St-Antoine<br />
+          <span class="hint">Universit&eacute; de Montr&eacute;al and Observatoire du Mont-M&eacute;gantic</span>
+        </p>
+        <p>
+          <a href="https://github.com/eartigau/emccd_bintool" target="_blank">Source on GitHub</a>
+          &middot;
+          <a href="https://eartigau.github.io/" target="_blank">More tools</a>
+        </p>
+      </footer>
+    </div>
+
+      <div id="lightbox" class="lightbox" hidden>
+        <button id="lightboxClose" class="lightbox-close" aria-label="Close" type="button">&times;</button>
+        <figure class="lightbox-figure">
+          <img id="lightboxImg" src="" alt="" />
+          <figcaption id="lightboxCaption"></figcaption>
+        </figure>
+      </div>
+
+    <script src="gate.js"></script>
+    <script src="lightbox.js"></script>
+  </body>
+</html>

@@ -1,7 +1,7 @@
 # emccd_bintool
 
-[Etienne Artigau](https://orcid.org/0000-0003-3506-5667), [Galina Sherren](https://orcid.org/0009-0006-5677-3944), [Rene Doyon](https://orcid.org/0000-0001-5485-4675), Jonathan St-Antoine
-(Universite de Montreal / Observatoire du Mont-Megantic)
+[Étienne Artigau](https://orcid.org/0000-0003-3506-5667), [Galina Sherren](https://orcid.org/0009-0006-5677-3944), [René Doyon](https://orcid.org/0000-0001-5485-4675), Jonathan St-Antoine
+(Université de Montréal / Observatoire du Mont-Mégantic)
 
 **Three things live in this repository.**
 
@@ -476,11 +476,11 @@ deleted, or refit an archived cube years later with a better model.
 
 ## Authors and credits
 
-[Etienne Artigau](https://orcid.org/0000-0003-3506-5667), [Galina Sherren](https://orcid.org/0009-0006-5677-3944), [Rene Doyon](https://orcid.org/0000-0001-5485-4675), Jonathan St-Antoine
-(Universite de Montreal and Observatoire du Mont-Megantic).
+[Étienne Artigau](https://orcid.org/0000-0003-3506-5667), [Galina Sherren](https://orcid.org/0009-0006-5677-3944), [René Doyon](https://orcid.org/0000-0001-5485-4675), Jonathan St-Antoine
+(Université de Montréal and Observatoire du Mont-Mégantic).
 
 The detector constants come from the `pesto_stats` calibration of the PESTO
-EMCCD at the Observatoire du Mont-Megantic: a full MCMC fit of the physical
+EMCCD at the Observatoire du Mont-Mégantic: a full MCMC fit of the physical
 model to a source-free sky region.
 
 Raw frames are **not** in this repository, and should not be committed to it. A

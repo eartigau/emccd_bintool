@@ -8,8 +8,8 @@ values at 1 ADU resolution, and draws the bin edges of `histogram.edges` on top
 of it. This is the picture to look at before trusting a set of bin edges, and
 the picture to show when explaining what the binning does.
 
-Authors: Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
-         Universite de Montreal / Observatoire du Mont-Megantic
+Authors: Étienne Artigau, Galina Sherren, René Doyon, Jonathan St-Antoine
+         Université de Montréal / Observatoire du Mont-Mégantic
 
 What you should see on a healthy EMCCD:
 

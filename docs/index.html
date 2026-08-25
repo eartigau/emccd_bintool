@@ -44,6 +44,7 @@
         <a href="index.html" class="current">1. Start here</a>
         <a href="outputs.html">2. Reading the results</a>
         <a href="bins.html">3. Why these bins</a>
+        <a href="tutorial.html">4. Tutorial: end to end</a>
       </nav>
 
       <header class="hero">
@@ -125,7 +126,19 @@
               </tr>
               <tr>
                 <td class="mono">pesto_astrometry.py</td>
-                <td>Optional last step: solves the field and puts RA/Dec on everything, so you know which light curve is your target. Needs two extra packages.</td>
+                <td>Solves the field and puts RA/Dec on everything, so you know which light curve is your target. Needs two extra packages.</td>
+              </tr>
+              <tr>
+                <td class="mono">embin_mcmc.py</td>
+                <td>Measures the detector constants of section 3 from your own frames, with MCMC, and proposes the bin edges that follow. Writes a typeset report. <a href="tutorial.html">Tutorial, step 1</a>.</td>
+              </tr>
+              <tr>
+                <td class="mono">embin_psf.py</td>
+                <td>Fits every star in the field at once with a shared Moffat, so a close pair is deblended rather than avoided. Writes the light-curve table. <a href="tutorial.html">Tutorial, step 3</a>.</td>
+              </tr>
+              <tr>
+                <td class="mono">run_pipeline.py</td>
+                <td>Runs all of the above in dependency order. <span class="mono">--list</span> shows the steps, <span class="mono">--only</span> and <span class="mono">--skip</span> pick them.</td>
               </tr>
               <tr>
                 <td class="mono">data_bin/</td>

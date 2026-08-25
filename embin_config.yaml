@@ -2,8 +2,8 @@
 # embin_config.yaml -- the ONE file you edit to run this toolkit
 # =============================================================================
 #
-# Authors: Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
-#          Universite de Montreal / Observatoire du Mont-Megantic
+# Authors: Étienne Artigau, Galina Sherren, René Doyon, Jonathan St-Antoine
+#          Université de Montréal / Observatoire du Mont-Mégantic
 #
 # READ THIS FIRST
 # ---------------
@@ -16,9 +16,9 @@
 #                               curves
 #
 # You do NOT need to edit any .py file to use them. Everything below is a
-# setting, and every setting is explained. If you change nothing at all, the
-# programs look for FITS frames in the folder `data_night/` and write their
-# results into the folder `data_bin/`.
+# setting, and every setting is explained. The one line you almost certainly
+# have to change is `input.directory` in section 1, which says where your raw
+# frames are; results are written into the folder `data_bin/`.
 #
 # YAML rules, in case this is your first YAML file:
 #   * indentation is meaningful: keep exactly the same number of leading spaces
@@ -40,8 +40,18 @@
 input:
   # The folder holding the individual raw frames of ONE acquisition sequence.
   # One FITS file = one readout of the camera. Put your frames here (or change
-  # this line to point at wherever they already live).
-  directory: "data_night"
+  # this line to point at wherever they already live). A relative path is taken
+  # from THIS file's folder; an absolute path is used as-is.
+  #
+  # Keep the raw frames OUT of a cloud-synced folder (OneDrive, iCloud Drive,
+  # Dropbox). Those sync clients evict files they consider cold and leave a
+  # zero-block placeholder behind with the full size still showing in `ls`.
+  # Reading one gives an empty file, and astropy then reports
+  #     OSError: No SIMPLE card found, this file does not appear to be a valid
+  #     FITS file
+  # on a frame that looks perfectly fine in the file listing. To check a folder
+  # on macOS:  find <folder> -name '*.fits' -flags +dataless | wc -l   -> want 0
+  directory: "/Users/eartigau/fits_archive/GitHubProjects/emccd_bintool/data_pesto"
 
   # Which files in that folder are frames. "*.fits" means every .fits file.
   pattern: "*.fits"
@@ -111,7 +121,7 @@ input:
 # your data. Re-run bin_optimizer.py with your own constants and paste the new
 # list here. That is the whole point of the tool.
 histogram:
-  edges: [0, 314, 321, 328, 332, 360, 397, 444, 500, 565, 640, 725, 819, 922, 1034, 1156, 1157]
+  edges:  [0, 320, 331, 404, 492, 601, 740, 949, 950]
 
   # For comparison only, do not use: 16 evenly spaced bins over the same range
   # retain a small fraction of the information, because they waste almost every
@@ -125,7 +135,7 @@ histogram:
 # These four numbers describe the camera. They are NOT fitted here: they come
 # from a separate calibration and are treated as known.
 #
-# The values below are for the PESTO EMCCD at Mont-Megantic, measured in the
+# The values below are for the PESTO EMCCD at Mont-Mégantic, measured in the
 # `pesto_stats` project by fitting the full physical model (Poisson electrons
 # -> Gamma EM-gain amplification -> Gaussian read noise -> bias) to a
 # source-free sky region with an MCMC. They are the posterior medians:
@@ -359,3 +369,160 @@ astrometry:
   gaia: true              # false -> skip the independent check against Gaia
                           # DR3. Leave it on: it is what tells you the solution
                           # is right rather than merely self-consistent.
+
+# -----------------------------------------------------------------------
+# 9. MCMC DETECTOR CALIBRATION -- only used by embin_mcmc.py
+# -----------------------------------------------------------------------
+# Section 3 above says the detector constants "are NOT fitted here: they come
+# from a separate calibration". `python embin_mcmc.py` IS that separate
+# calibration, run on your own frames instead of someone else's.
+#
+# It pools the raw ADU values of the first `n_frames` frames over every pixel
+# into ONE histogram, samples bias / ron / gain / mean-flux-per-pixel from it
+# with emcee, writes a three-page PDF report (triangle plot, fit quality, and
+# per-pixel uncertainty against per-pixel flux over the whole frame), and prints
+# the optimal `histogram: edges:` that follow from the detector it measured --
+# ready to paste back into sections 2 and 3.
+#
+# Nothing else in the toolkit reads this section, so deleting it costs nothing
+# but the defaults built into embin_mcmc.py, which are these.
+mcmc:
+  n_frames: 64          # how many frames to pool. 64 is already 2.8e7 pixel
+                        # values, far more than the fit needs; more frames buy
+                        # tail statistics for the gain and nothing else.
+
+  # Pixels whose mean across the frames sits further than this many robust
+  # sigmas from the median mean are left out of the pooled histogram. The model
+  # gives EVERY pixel the same flux, and a star is a pixel with a hundred times
+  # the sky flux sitting in exactly the high-ADU tail the gain is read from.
+  # null -> fit every pixel and see for yourself how much it moves.
+  # This mask applies ONLY to the detector fit. Page 3 of the report always
+  # fits every pixel of the frame, stars included: that is its whole point.
+  bright_pixel_clip: 5.0
+
+  # The ADU range that is fitted. null -> the full support of the data, i.e.
+  # from the lowest to the highest value that occurs at all. The model is
+  # renormalised over whatever range is used, so cutting it is safe.
+  adu_min: null
+  adu_max: null
+
+  # Step, in ADU, of the internal grid the EM-gain continuum is tabulated on
+  # before the read noise is convolved in. 0.25 holds the discretisation error
+  # below 1.0e-4 of the model everywhere; 0.5 is twice as fast and still below
+  # 3.0e-4. The peak of the histogram holds a million counts, so this needs to
+  # stay well below the 1.0e-3 Poisson precision of the data.
+  grid_step: 0.25
+
+  # How many frames page 3 of the report -- per-pixel uncertainty against
+  # per-pixel flux -- fits each pixel from. This is NOT `n_frames` above, and it
+  # should be much larger. The pooled histogram has 2.8e7 values whatever
+  # `n_frames` is; a per-pixel fit has only this many values PER PIXEL, and at a
+  # sky flux of 0.017 e-/frame, 64 frames means about one electron per pixel for
+  # the whole sequence. A third of the pixels then see nothing at all, their
+  # likelihood never turns over, and the fit pins them to the bottom of the flux
+  # grid -- the plot ends up measuring small-number statistics rather than the
+  # estimator. null -> every frame in the folder, which is the right answer.
+  flux_map_frames: null
+
+  mu_start: 0.02        # first guess at the flux [e-/frame]; only the seed of
+                        # the maximum-likelihood search that seeds the walkers
+  walkers: 32           # emcee ensemble size
+  steps: 3000           # steps per walker. About 90 s at grid_step 0.25.
+  burn: 600             # steps discarded from the head of each chain
+  thin: 10              # keep one sample in this many after the burn-in
+  seed: 42              # fixed, so a re-run reproduces the same chain
+
+  # Prior ranges: flat between the two bounds, except `mu`, which is flat in
+  # log(mu). These are deliberately wide -- they are there to keep the walkers
+  # out of unphysical territory, not to express an opinion.
+  priors:
+    bias: [250.0, 400.0]      # ADU
+    ron: [0.5, 40.0]          # ADU
+    gain: [5.0, 500.0]        # ADU/e-
+    mu: [1.0e-6, 10.0]        # e-/frame, log-uniform
+
+  # What to hand bin_optimizer.design_bins once the detector is known. Note
+  # `nbins` is yours to choose and the flux range should be no wider than you
+  # actually need: the design maximises the WORST case over it, so padding the
+  # range costs accuracy everywhere.
+  bins:
+    nbins: 8
+    mu_min: 1.0e-3      # e-/frame
+    mu_max: 8.0         # e-/frame
+    method: "both"      # "dp" | "closed" | "both" -- see bin_optimizer.py
+    n_draws: 24         # posterior samples re-designed, purely to put an error
+                        # bar on each edge. About 2 s each; 0 switches it off.
+
+# -----------------------------------------------------------------------
+# 10. PSF PHOTOMETRY -- only used by embin_psf.py
+# -----------------------------------------------------------------------
+# `run_chunks.py` measures each star by summing a fixed aperture. That fails the
+# moment two stars sit closer together than the aperture, which is exactly the
+# case here: TOI-1452 has a companion 3.1 arcsec away, about seven pixels, and
+# no aperture holds one without holding part of the other.
+#
+# `python embin_psf.py` replaces the aperture with a fit. It finds the stars on
+# `astrometry_stack.fits`, fits ONE isotropic Moffat shared by all of them to
+# fix their positions, then fits every chunk of `chunk_summary.fits` again with
+# the FWHM, the beta and a rigid (dx, dy) shift shared across stars and one
+# flux per star. Because the stars are solved TOGETHER, the overlap of the
+# blended pair is an off-diagonal element of the normal matrix rather than an
+# effect to hope is small: the fluxes are deblended and the error bars carry the
+# cost of the deblending.
+#
+# It writes `psf_photometry.fits` (and the same table as .ecsv): one row per
+# chunk, with the time, the FWHM in arcsec, beta, and a flux and flux error for
+# every star.
+psf:
+  # Star finding on the stack, with photutils' DAOStarFinder.
+  threshold_sigma: 8.0  # detection threshold, in robust sigmas of the stack
+  fwhm_guess: 3.5       # px; the detection kernel width AND the starting point
+                        # of the fit. It does not need to be accurate, the fit
+                        # moves it, but a wildly wrong value changes WHICH
+                        # sources are detected.
+  beta_guess: 3.0       # starting Moffat beta. Real seeing profiles land
+                        # between 2 and 5; the fit walks there on its own.
+
+  # Beta is measured ONCE, on the deep stack, and held fixed for every chunk.
+  # This is not laziness, it is the only thing the data supports. Beta controls
+  # the WINGS of the profile, and in a 64-frame chunk a pixel several FWHM from
+  # a star sees well under one electron for the entire chunk: its flux estimate
+  # is noise-dominated and biased low, and a free beta reads that bias as a
+  # genuinely narrow-winged PSF and runs away to its upper bound. On this
+  # dataset it railed at 30 in ten chunks out of fifteen, with chi2 still
+  # falling monotonically -- the signature of a parameter the data cannot
+  # determine. The deep stack has fifteen times the frames and real signal in
+  # the wings, so beta is measurable there, and it is a property of the optics
+  # and the atmosphere that has no reason to change over 45 seconds anyway.
+  #
+  # true -> refit beta in every chunk anyway. The per-chunk value is reported
+  # with a NaN error bar whenever it lands on a bound, so you can see it happen.
+  beta_free: false
+  max_stars: 0          # 0 -> keep every detection. Set it to keep only the N
+                        # brightest, which is worth doing if the threshold is
+                        # low enough to pull in noise peaks.
+
+  # How much of each star is fitted, as a multiple of the FWHM. The fit uses
+  # the UNION of these boxes, so a pixel between two blended stars is fitted
+  # once with both stars contributing to it. A Moffat has heavy wings, so going
+  # much below 4 starts biasing the total flux low.
+  fit_radius: 4.0
+
+  # Two stars closer than this many FWHM are reported as a blend, with the
+  # inflation of their error bars and their flux-flux correlation. This is a
+  # REPORTING threshold only: every star is always fitted jointly with every
+  # other, so changing it never changes a flux.
+  blend_factor: 3.0
+
+  # The Moffat is averaged over this many sub-positions per pixel per axis
+  # before being compared to the data. At a 3-pixel FWHM, sampling at pixel
+  # centres instead (oversample: 1) misestimates the peak pixel by several per
+  # cent, in a way that depends on where the star falls inside its pixel -- so
+  # it turns the drift into a spurious flux wobble. 3 is plenty; the cost is
+  # quadratic.
+  oversample: 3
+
+  # The sky under the stars: "constant" (one number per chunk) or "plane" (a
+  # tilted plane, three numbers). Either way it is solved together with the
+  # fluxes, so the flux errors already include not knowing the sky exactly.
+  background: "constant"
