@@ -9,3 +9,7 @@ data_bin/
 .venv/
 __pycache__/
 *.pyc
+
+# Figures written by demo_optimal_bins.py and plot_bins.py. Regenerable from
+# the code alone; the versions used in the write-up live with the paper.
+figures/

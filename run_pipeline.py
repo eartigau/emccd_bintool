@@ -76,7 +76,7 @@ def main(argv=None):
     ap.add_argument('--no-gaia', action='store_true')
     ap.add_argument('--no-figure', action='store_true')
     ap.add_argument('--no-chunks', action='store_true',
-                    help='update only the summary, not each embin_chunkNN.fits')
+                    help='update only the summary, not each embin_chunkNN.fits.gz')
     args = ap.parse_args(argv)
 
     t0 = time.time()

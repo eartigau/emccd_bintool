@@ -174,11 +174,13 @@ fit:
                        # Purely a memory/speed knob; lower it if you run out of
                        # RAM, raise it if you have plenty.
 
-  # The error on the flux is ALWAYS written out (the FLUX_ERR extension): it is
+  # The error on the flux is ALWAYS written out (the FLUX_ERR extension of the
+  # flux file): it is
   # the half-width (MU_HI - MU_LO)/2 of the interval where the log-likelihood has
   # dropped by 0.5 from its peak, which is the standard 1-sigma interval. At low
   # flux that interval is genuinely lopsided, because a flux cannot be negative.
-  # Set this to true to ALSO keep the two raw bounds as their own extensions.
+  # Set this to true to ALSO keep the two raw bounds as their own extensions of
+  # that same flux file.
   asymmetric_bounds: false
 
 # -----------------------------------------------------------------------
@@ -265,13 +267,65 @@ chunks:
 # EVERYTHING this toolkit writes goes into `directory`, which is created if it
 # does not exist. Nothing is ever written next to your raw frames.
 #
-#   embin.py     writes  <directory>/<file>
+#   embin.py     writes  <directory>/<cube_file>
+#                        <directory>/<cube_file, + _flux>
 #   run_chunks.py writes <directory>/<chunk_prefix>00.fits, ...01.fits, ...
+#                        <directory>/<chunk_prefix>00_flux.fits, ...
 #                        <directory>/<summary>
 #                        <directory>/<figures>/*.pdf
+#
+# ... every one of them with '.gz' on the end, unless `compress` below is false.
+#
+# EVERY RESULT COMES IN TWO FILES, and the split is the point: one holds the
+# measurement, the other holds a fit to it.
+#
+#   the CUBE file, <cube_file> or <chunk_prefix>NN.fits -- ARCHIVE THIS ONE
+#     HDU 0  PRIMARY   no data; the header documents the bin edges, the detector
+#                      constants, the flux grid and every parameter of the run,
+#                      which is enough to redo the fit from this file alone
+#     HDU 1  HISTCUBE  3-D cube (Nbin, ny, nx), counts per histogram bin per pixel,
+#                      in the narrowest integer type that can hold one count out
+#                      of the frames binned: uint8 below 256 frames, uint16 below
+#                      65536, int32 above
+#     HDU 2  HEADERS   one row per input frame, one column per FITS keyword
+#     HDU 3+ STAMPnn   one per detected source: (Nframes, box, box) of RAW ADU,
+#                      the pixel-level time series the histogram cannot hold.
+#                      Its header carries the source position (XCEN/YCEN, and
+#                      XDS9/YDS9 in FITS 1-indexed convention), the stamp corner
+#                      (X0/Y0), the fitted peak flux and error (PEAKFLUX/PEAKERR)
+#                      and the detection significance (SIGNIF)
+#
+#   the FLUX file, same name with _flux before the extension
+#     HDU 0  PRIMARY   no data; CUBEFILE names the cube above, and the bin edges,
+#                      detector constants and flux grid are copied from it
+#     HDU 1  FLUX      2-D image, best-fit mean flux [e-/frame] per pixel
+#     HDU 2  FLUX_ERR  2-D image, the 1-sigma error on FLUX [e-/frame]
+#                      (MU_LO / MU_HI follow when fit.asymmetric_bounds is true)
+#
+# Nothing fitted is stored in the cube file, so a flux file is never the only
+# copy of anything. Deleting one costs a re-fit and no data:
+#
+#   python embin.py --from-cube data_bin/embin_chunk00.fits.gz
+#   # or, in python:
+#   from embin import flux_maps_from_cube
+#   flux, flux_err, mu_lo, mu_hi = flux_maps_from_cube('data_bin/embin_chunk00.fits.gz')
 output:
   directory: "data_bin"            # the output folder
-  file: "embin_output.fits"        # embin.py's single result file
+  compress: true                   # gzip every file written here. The '.gz' is
+                                   # appended to the names below rather than
+                                   # spelled out in them, so you get
+                                   # embin_chunk07.fits.gz and, beside it,
+                                   # embin_chunk07_flux.fits.gz. astropy
+                                   # compresses and decompresses on the file
+                                   # name alone, so fits.open() and DS9 read
+                                   # them unchanged, and gunzip gives you an
+                                   # ordinary FITS file. Worth doing
+                                   # systematically: a 16-bin 426 x 1024 cube
+                                   # of 64 frames is 7.0 MB of data and 0.75 MB
+                                   # on disk, for about 2.5 s of compression.
+                                   # false -> plain, uncompressed .fits.
+  cube_file: "embin_cube.fits"     # embin.py's cube file; its flux file is the
+                                   # same name with _flux before the extension
   chunk_prefix: "embin_chunk"      # run_chunks.py's per-chunk files
   summary: "chunk_summary.fits"    # run_chunks.py's stitched summary file
   figures: "figures"               # sub-folder of `directory` for the PDF plots

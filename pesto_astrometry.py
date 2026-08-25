@@ -67,6 +67,10 @@ WHAT IT WRITES
     data_bin/chunk_summary.fits      WCS in the primary header; RA/Dec columns
                                      added to TRACKS; per-chunk field centre and
                                      measured drift added to CHUNKS
+    data_bin/embin_chunkNN.fits      WCS in the primary header and in HISTCUBE
+    data_bin/embin_chunkNN_flux.fits WCS in the primary header and in FLUX /
+                                     FLUX_ERR: the cube and the maps fitted from
+                                     it are the same sky, so both are solved
     data_bin/gaia_field.fits         the Gaia cone search, cached
     data_bin/figures/astrometry.pdf  the solved field with the catalogue on top,
                                      the residuals, and a close-up of the target
@@ -99,7 +103,7 @@ from astropy.table import Table
 from astropy.wcs import WCS
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from embin import _resolve, load_config, log  # noqa: E402
+from embin import _resolve, flux_path_for, load_config, log  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -887,7 +891,10 @@ def match_to_gaia(stars_xy, wcs, gaia, tol_arcsec=2.0):
 # Which extensions of an embin product are images on the sky, and therefore
 # want a WCS. HISTCUBE is three-dimensional, so it gets the two spatial axes
 # plus a third axis that is the histogram bin and is explicitly NOT a sky axis.
-_IMAGE_EXTS = ('FLUX', 'FLUX_ERR')
+# FLUX / FLUX_ERR live in the flux file and HISTCUBE in the cube file, so no
+# single product carries all three; the lists are the union, and each file is
+# solved on whichever of them it happens to hold.
+_IMAGE_EXTS = ('FLUX', 'FLUX_ERR', 'MU_LO', 'MU_HI')
 _CUBE_EXTS = ('HISTCUBE',)
 
 
@@ -919,12 +926,20 @@ def wcs_for_shift(header, shift):
 
 def write_wcs_into(path, header, label=''):
     """
-    Put a WCS into every image extension of one embin product, in place.
+    Put a WCS into every image extension of one embin product.
 
     The primary header carries it too, so that a reader that only looks there
     still learns where the field is, even though the primary holds no pixels.
+
+    A gzipped product cannot be edited in place -- astropy has to rewrite the
+    whole stream to change one card -- so it is read, edited in memory and
+    written back over itself through a temporary file, which also means an
+    interrupted run leaves the original intact rather than a half-written file.
+    A plain .fits is still updated in place, which is much cheaper.
     """
-    with fits.open(path, mode='update') as hdul:
+    zipped = path.endswith('.gz')
+    hdul = fits.open(path, mode='readonly' if zipped else 'update')
+    try:
         targets = [0]
         for i, hdu in enumerate(hdul[1:], start=1):
             name = hdu.header.get('EXTNAME', '')
@@ -950,7 +965,14 @@ def write_wcs_into(path, header, label=''):
                 for k in ('CD1_3', 'CD2_3', 'CD3_1', 'CD3_2'):
                     hdr[k] = (0.0, 'No coupling between sky and bin axes')
             hdr['ASTROMSR'] = ('pesto_astrometry.py', 'WCS added after binning')
-        hdul.flush()
+        if zipped:
+            tmp = path + '.tmp'
+            hdul.writeto(tmp, overwrite=True)
+            os.replace(tmp, path)
+        else:
+            hdul.flush()
+    finally:
+        hdul.close()
     log(f'    WCS written into {os.path.basename(path)}'
         + (f' ({label})' if label else '') + f', {len(targets)} extension(s)',
         'value')
@@ -1077,6 +1099,11 @@ def main(argv=None):
     outdir = _resolve(cfg, out_cfg.get('directory', 'data_bin'))
     summary = os.path.join(outdir, out_cfg.get('summary',
                                                'chunk_summary.fits'))
+    # run_chunks.py gzips its products by default, so the name in the config is
+    # the uncompressed one and what is on disk usually ends in .gz. Take
+    # whichever exists, so neither setting has to be kept in step with the other.
+    if not os.path.exists(summary) and os.path.exists(summary + '.gz'):
+        summary += '.gz'
     if not os.path.exists(summary):
         log(f'{summary} does not exist: run run_chunks.py first', 'error')
         return 1
@@ -1332,13 +1359,29 @@ def main(argv=None):
         n_done = 0
         for row, shift in zip(chunk_tab, exact if exact is not None
                               else [(0.0, 0.0)] * len(chunk_tab)):
-            chunk_path = os.path.join(outdir, str(row['file']))
-            if not os.path.exists(chunk_path):
-                log(f'    {row["file"]}: not on disk, skipped', 'warn')
-                continue
-            write_wcs_into(chunk_path, wcs_for_shift(header, shift),
-                           label=f'drift {shift[0]:+.2f}, {shift[1]:+.2f} px')
-            n_done += 1
+            # Each chunk is TWO files -- the histogram cube and the flux maps
+            # fitted from it -- and both are images of the same sky, so both get
+            # the same solution. The flux file's name is in the CHUNKS table when
+            # the summary was written by a current run_chunks.py, and derivable
+            # from the cube's name when it was not.
+            names = [str(row['file'])]
+            if 'flux_file' in chunk_tab.colnames and str(row['flux_file']):
+                names.append(str(row['flux_file']))
+            else:
+                names.append(os.path.basename(flux_path_for(str(row['file']))))
+            solution = wcs_for_shift(header, shift)
+            wrote_any = False
+            for name in names:
+                path = os.path.join(outdir, name)
+                if not os.path.exists(path) and os.path.exists(path + '.gz'):
+                    path += '.gz'
+                if not os.path.exists(path):
+                    log(f'    {name}: not on disk, skipped', 'warn')
+                    continue
+                write_wcs_into(path, solution,
+                               label=f'drift {shift[0]:+.2f}, {shift[1]:+.2f} px')
+                wrote_any = True
+            n_done += int(wrote_any)
         log(f'  {n_done} chunk product(s) now carry a WCS', 'value')
 
     if not args.no_figure:

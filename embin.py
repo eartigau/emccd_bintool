@@ -30,21 +30,42 @@ of histogram bin edges defined in a YAML configuration file, this script:
      box -- so the raw pixel-level time series of each star survives the
      histogram compression untouched.
 
-  4. Writes everything to one multi-extension FITS file:
+  4. Writes TWO files, one holding the data and one holding the result.
 
-        HDU 0  PRIMARY    no data; the header documents the bin edges and
-                          every parameter of the run
-        HDU 1  FLUX       2-D image, best-fit mean flux [e-/frame] per pixel
-        HDU 2  FLUX_ERR   2-D image, its 1-sigma statistical error [e-/frame]
-        HDU 3  HISTCUBE   3-D cube (Nbin, ny, nx) of per-pixel bin counts
-        HDU 4  HEADERS    table, one row per input file, one column per FITS
+     THE CUBE FILE -- the only thing that has to be archived:
+
+        HDU 0  PRIMARY    no data; the header documents the bin edges, the
+                          detector constants and every parameter of the run
+        HDU 1  HISTCUBE   3-D cube (Nbin, ny, nx) of per-pixel bin counts
+        HDU 2  HEADERS    table, one row per input file, one column per FITS
                           keyword found across all of them
-        HDU 5+ STAMPnn    3-D cube (Nframes, box, box) of raw ADU for one
+        HDU 3+ STAMPnn    3-D cube (Nframes, box, box) of raw ADU for one
                           detected source; its header gives the source's pixel
                           position, its detection significance and the stamp's
-                          corner in frame coordinates (the asymmetric MU_LO /
-                          MU_HI bounds are inserted before the stamps when
+                          corner in frame coordinates
+
+     THE FLUX FILE -- the mean and its error, in two extensions:
+
+        HDU 0  PRIMARY    no data; provenance (which cube file this came from)
+                          plus the detector constants and flux grid used
+        HDU 1  FLUX       2-D image, best-fit mean flux [e-/frame] per pixel
+        HDU 2  FLUX_ERR   2-D image, its 1-sigma statistical error [e-/frame]
+                          (the asymmetric MU_LO / MU_HI bounds follow when
                           fit.asymmetric_bounds is on)
+
+     No fitted quantity is stored in the cube file. The histogram cube IS the
+     measurement; the flux map is one particular reduction of it, and the cube
+     file's header carries everything -- bin edges, bias, RON, gain, flux grid
+     -- needed to redo that reduction. So the flux file is a convenience, never
+     the archive: `read_cube()` and `flux_maps_from_cube()` below regenerate it
+     from the cube alone, which is also how anyone else reads these files:
+
+         from embin import flux_maps_from_cube
+         flux, flux_err, mu_lo, mu_hi = flux_maps_from_cube('embin_cube.fits')
+
+     and, from the command line, `python embin.py --from-cube embin_cube.fits`
+     writes the two-extension flux file for an existing cube without ever
+     touching the original frames.
 
 WHY A HISTOGRAM CUBE
 --------------------
@@ -63,6 +84,9 @@ USAGE
     python embin.py                       # uses embin_config.yaml, as shipped
     python embin.py --first 640 --n-files 64   # frames 640 to 703 instead
     python embin.py --output somewhere/else.fits
+    python embin.py --from-cube data_bin/embin_cube.fits   # re-fit a cube file,
+                                          # no frames and no YAML needed: the
+                                          # cube's own header says how
 
 Everything else -- which folder the frames are in, the bin edges, the detector
 constants, the detection threshold -- is set in embin_config.yaml, which is
@@ -226,23 +250,85 @@ def output_path(cfg, override=None, name=None):
         return override
     directory = _resolve(cfg, out_cfg.get('directory', 'data_bin'))
     os.makedirs(directory, exist_ok=True)
-    return os.path.join(directory, name or out_cfg.get('file', 'embin_output.fits'))
+    return os.path.join(directory, name or out_cfg.get('cube_file')
+                        or out_cfg.get('file', 'embin_cube.fits'))
+
+
+def gz_path(path, compress=True):
+    """`path` with '.gz' on the end when `compress`, and never doubled.
+
+    Every product of this pipeline is written gzipped by default. astropy picks
+    the compression from the file name alone, so adding the suffix here is the
+    whole implementation: fits.open() and fits.getdata() read '.fits.gz' with no
+    change at the call site, and the files stay ordinary FITS to anything that
+    gunzips them. It is worth it -- a histogram cube is mostly small integers
+    and empty planes, and compresses by more than twenty to one.
+    """
+    if not compress or path.endswith('.gz'):
+        return path
+    return path + '.gz'
+
+
+def strip_gz(path):
+    """`path` without a trailing '.gz', for splitting off the real extension."""
+    return path[:-3] if path.endswith('.gz') else path
+
+
+def flux_path_for(cube_path):
+    """The flux file that belongs to a cube file: its name with '_flux' added.
+
+    One rule, used by embin.py, by run_chunks.py and by cube_to_flux_file(), so
+    a cube and its fit are always one predictable rename apart -- the output
+    folder holds embin_chunk07.fits.gz next to embin_chunk07_flux.fits.gz, and
+    no index of which goes with which is needed. A gzipped cube gets a gzipped
+    flux file: the suffix is put back after '_flux', never left dangling on the
+    end as a plain splitext would leave it.
+    """
+    root, ext = os.path.splitext(strip_gz(cube_path))
+    out = f'{root}_flux{ext}'
+    return gz_path(out, cube_path.endswith('.gz'))
 
 
 # ---------------------------------------------------------------------------
 # Step 1 -- the per-pixel histogram cube
 # ---------------------------------------------------------------------------
+def count_dtype(n_frames):
+    """The smallest integer type that can hold a count out of `n_frames`.
+
+    A bin of one pixel's histogram counts frames, so no entry can exceed the
+    number of frames binned. 64 frames therefore need one byte, not four:
+    uint8 up to 255 frames, uint16 up to 65535, int32 beyond. FITS stores uint8
+    natively (BITPIX = 8) and uint16 through the standard BZERO offset that
+    astropy writes and reads back on its own, so the file stays ordinary FITS.
+
+    The saving is real but modest once the file is gzipped, which is what the
+    files actually are: on a 16-bin 426 x 1024 cube of 64 frames, int32 is 27.9
+    MB raw and 0.98 MB gzipped, uint8 is 6.99 MB raw and 0.75 MB gzipped. The
+    compression already removes most of the padding; the narrow type takes
+    another quarter off the archive, a third off the time spent compressing,
+    and a factor of four off what the cube costs in memory -- which is the part
+    that matters to anyone who gunzips it or holds several chunks at once.
+    """
+    if n_frames < 256:
+        return np.uint8
+    if n_frames < 65536:
+        return np.uint16
+    return np.int32
+
+
 def build_histogram_cube(files, edges, hdu_index=0):
     """Accumulate one ADU histogram per pixel over all frames.
 
     Returns
     -------
-    cube      : int32 array (nbins, ny, nx) -- counts per bin per pixel
+    cube      : integer array (nbins, ny, nx) -- counts per bin per pixel, in
+                the narrowest type that can hold len(files) (see count_dtype)
     n_under   : int  values below edges[0]  (counted into bin 0)
     n_over    : int  values >= edges[-2]    (counted into the open last bin)
     """
     nbins = len(edges) - 1
     bin_ids = np.arange(nbins, dtype=np.int64)[:, None, None]
+    dtype = count_dtype(len(files))
 
     cube = None
     n_under = 0
@@ -255,9 +341,11 @@ def build_histogram_cube(files, edges, hdu_index=0):
         img = np.asarray(img, dtype=np.float64)
         if cube is None:
             ny, nx = img.shape
-            cube = np.zeros((nbins, ny, nx), dtype=np.int32)
+            cube = np.zeros((nbins, ny, nx), dtype=dtype)
             log(f'frames are {nx} x {ny} pixels, binning into {nbins} bins '
-                f'-> cube ({nbins}, {ny}, {nx})', 'value')
+                f'-> cube ({nbins}, {ny}, {nx}) of {np.dtype(dtype).name} '
+                f'({cube.nbytes / 1e6:.1f} MB), no count can exceed '
+                f'{len(files)} frames', 'value')
         elif img.shape != cube.shape[1:]:
             log(f'{os.path.basename(path)} is {img.shape}, expected {cube.shape[1:]} '
                 f'- all frames must share one shape', 'error')
@@ -606,8 +694,16 @@ def _comment(hdr, text):
     hdr.append(('COMMENT', text), bottom=True)
 
 
-def primary_header(cfg, files, edges, n_under, n_over, n_sources):
-    """The PRIMARY header: the bin edges, plus a complete record of the run."""
+def primary_header(cfg, files, edges, n_under, n_over, n_sources, flux_file=None):
+    """The PRIMARY header of the cube file: the bin edges, plus a complete record
+    of the run.
+
+    This header is the cube's documentation AND its instruction manual: bin
+    edges, detector constants and flux grid are all written here, so
+    read_cube() / flux_maps_from_cube() can rebuild the mean-flux map from the
+    file alone, with no configuration file in sight. Keep the two in step --
+    anything the reader needs must be written here.
+    """
     hdr = fits.Header()
     _kw(hdr, 'ORIGIN', 'embin.py', 'emccd_bintool')
     _kw(hdr, 'DATE', datetime.now().isoformat(timespec='seconds'), 'File creation date (local)')
@@ -649,13 +745,18 @@ def primary_header(cfg, files, edges, n_under, n_over, n_sources):
 
     fit_cfg = cfg.get('fit', {})
     _comment(hdr, '--- flux fit ----------------------------------------------')
-    _kw(hdr, 'FITDONE', bool(fit_cfg.get('enabled', True)), 'Was the per-pixel flux fit run?')
-    if fit_cfg.get('enabled', True):
-        _kw(hdr, 'MUMIN', float(fit_cfg.get('mu_min', 1e-4)), 'Flux grid lower bound [e-/frame]')
-        _kw(hdr, 'MUMAX', float(fit_cfg.get('mu_max', 10.0)), 'Flux grid upper bound [e-/frame]')
-        _kw(hdr, 'MUNGRID', int(fit_cfg.get('n_grid', 2000)), 'Flux grid points (log-spaced)')
-        _kw(hdr, 'MUBOUNDS', bool(fit_cfg.get('asymmetric_bounds', False)),
-            'Are the MU_LO / MU_HI extensions present?')
+    _comment(hdr, 'NO fitted quantity is stored in this file: HISTCUBE is the')
+    _comment(hdr, 'measurement, the flux map is a reduction of it. These are the')
+    _comment(hdr, 'search-grid parameters that reduction should use, and the ones')
+    _comment(hdr, 'embin.py did use for the companion file named in FLUXFILE.')
+    _kw(hdr, 'MUMIN', float(fit_cfg.get('mu_min', 1e-4)), 'Flux grid lower bound [e-/frame]')
+    _kw(hdr, 'MUMAX', float(fit_cfg.get('mu_max', 10.0)), 'Flux grid upper bound [e-/frame]')
+    _kw(hdr, 'MUNGRID', int(fit_cfg.get('n_grid', 2000)), 'Flux grid points (log-spaced)')
+    _kw(hdr, 'FITCHUNK', int(fit_cfg.get('chunk_size', 2048)), 'Pixels per matrix multiply in the fit')
+    _kw(hdr, 'MUBOUNDS', bool(fit_cfg.get('asymmetric_bounds', False)),
+        'Keep the asymmetric MU_LO / MU_HI bounds too?')
+    _kw(hdr, 'FLUXFILE', os.path.basename(flux_file) if flux_file else '',
+        'Companion file holding FLUX / FLUX_ERR')
 
     src_cfg = cfg.get('sources', {})
     _comment(hdr, '--- sources and raw postage stamps ------------------------')
@@ -695,34 +796,35 @@ def stamp_header(src, index, n_frames):
     return hdr
 
 
-def write_mef(path, cfg, files, edges, cube, flux, flux_err, mu_lo, mu_hi,
-              sources, stamps, n_under, n_over, overwrite=True):
-    """Assemble and write the multi-extension FITS file."""
-    hdus = [fits.PrimaryHDU(header=primary_header(cfg, files, edges,
-                                                  n_under, n_over, len(sources)))]
+def _write(hdus, path, overwrite):
+    """Write one HDU list and say what came out.
 
-    flux_hdr = fits.Header()
-    _kw(flux_hdr, 'EXTNAME', 'FLUX', 'Per-pixel mean flux')
-    _kw(flux_hdr, 'BUNIT', 'e-/frame', 'Electrons per frame per pixel')
-    _comment(flux_hdr, "Maximum-likelihood mean flux, fitted from each pixel's")
-    _comment(flux_hdr, 'own histogram in HISTCUBE, using emccd_histo.py.')
-    if flux is None:
-        flux_data = None
-        _comment(flux_hdr, 'Flux fit was disabled in the configuration (fit.enabled=false).')
-    else:
-        flux_data = flux.astype(np.float32)
-    hdus.append(fits.ImageHDU(data=flux_data, header=flux_hdr))
+    A '.gz' at the end of `path` is all it takes: astropy gzips on the way out
+    and gunzips on the way in, so nothing downstream has to know. The line it
+    logs gives the size on disk and, for a compressed file, what that is as a
+    fraction of the uncompressed bytes.
+    """
+    hdus = fits.HDUList(hdus)
+    raw = sum(h.data.nbytes for h in hdus if h.data is not None)
+    hdus.writeto(path, overwrite=overwrite)
+    size = os.path.getsize(path)
+    ratio = f', {raw / size:.0f}x smaller than its {raw / 1e6:.0f} MB of data' \
+        if path.endswith('.gz') and size else ''
+    log(f'wrote {path} ({len(hdus)} HDUs, {size / 1e6:.1f} MB{ratio})', 'value')
 
-    err_hdr = fits.Header()
-    _kw(err_hdr, 'EXTNAME', 'FLUX_ERR', 'Error on the per-pixel mean flux')
-    _kw(err_hdr, 'BUNIT', 'e-/frame', 'Electrons per frame per pixel')
-    _comment(err_hdr, 'Symmetrised 1-sigma statistical error on FLUX, i.e. half')
-    _comment(err_hdr, 'the width of the delta-log-likelihood = 0.5 interval,')
-    _comment(err_hdr, '(MU_HI - MU_LO) / 2. It is a COUNTING error only: it says')
-    _comment(err_hdr, 'how well NFRAMES frames pin down this pixel own flux under')
-    _comment(err_hdr, 'the model, and knows nothing of flat-field or PSF errors.')
-    hdus.append(fits.ImageHDU(data=None if flux_err is None else flux_err.astype(np.float32),
-                              header=err_hdr))
+
+def write_cube_mef(path, cfg, files, edges, cube, sources, stamps,
+                   n_under, n_over, flux_file=None, overwrite=True):
+    """Write the CUBE file: the histogram cube, and nothing derived from it.
+
+    This is the archival product. It holds the measurement (HISTCUBE), the raw
+    data that the histogram cannot represent (the STAMPnn stamps), the log of
+    where every frame came from (HEADERS), and a header complete enough that
+    the mean-flux map can be regenerated from it -- see flux_maps_from_cube().
+    The map itself goes in the companion flux file, named here in FLUXFILE.
+    """
+    hdus = [fits.PrimaryHDU(header=primary_header(cfg, files, edges, n_under, n_over,
+                                                  len(sources), flux_file=flux_file))]
 
     cube_hdr = fits.Header()
     _kw(cube_hdr, 'EXTNAME', 'HISTCUBE', 'Per-pixel histogram of raw ADU values')
@@ -731,6 +833,7 @@ def write_mef(path, cfg, files, edges, cube, flux, flux_err, mu_lo, mu_hi,
     _comment(cube_hdr, 'many frames had that pixel inside bin b. Bin edges are')
     _comment(cube_hdr, 'the BINEDGnn keywords of the primary header.')
     _kw(cube_hdr, 'NBIN', cube.shape[0], 'Number of histogram bins')
+    _kw(cube_hdr, 'NFRAMES', len(files), 'Frames accumulated (= sum over the bin axis)')
     for i, e in enumerate(edges):
         _kw(cube_hdr, f'BINEDG{i:02d}', float(e), f'Bin edge {i} [ADU]')
     hdus.append(fits.ImageHDU(data=cube, header=cube_hdr))
@@ -741,21 +844,178 @@ def write_mef(path, cfg, files, edges, cube, flux, flux_err, mu_lo, mu_hi,
     _comment(tab_hdu.header, 'found in any of the input files.')
     hdus.append(tab_hdu)
 
-    if mu_lo is not None:
-        for name, data, what in (('MU_LO', mu_lo, 'Lower'), ('MU_HI', mu_hi, 'Upper')):
-            hdr = fits.Header()
-            _kw(hdr, 'EXTNAME', name, f'{what} 1-sigma flux bound')
-            _kw(hdr, 'BUNIT', 'e-/frame', 'Electrons per frame per pixel')
-            _comment(hdr, f'{what} bound of the delta-log-likelihood = 0.5 interval,')
-            _comment(hdr, 'before it is symmetrised into FLUX_ERR. The interval is')
-            _comment(hdr, 'genuinely asymmetric at low flux, where mu is bounded by 0.')
-            hdus.append(fits.ImageHDU(data=data.astype(np.float32), header=hdr))
-
     for i, (src, stamp) in enumerate(zip(sources, stamps), start=1):
         hdus.append(fits.ImageHDU(data=stamp, header=stamp_header(src, i, stamp.shape[0])))
 
-    fits.HDUList(hdus).writeto(path, overwrite=overwrite)
-    log(f'wrote {path} ({len(hdus)} HDUs, {os.path.getsize(path) / 1e6:.1f} MB)', 'value')
+    _write(hdus, path, overwrite)
+
+
+def write_flux_mef(path, flux, flux_err, mu_lo=None, mu_hi=None,
+                   cube_header=None, cube_file=None, overwrite=True):
+    """Write the FLUX file: the mean flux and its error, in two extensions.
+
+    Everything in it is derived from one histogram cube, so the primary header
+    is provenance -- which cube file, how many frames, which bin edges, which
+    detector constants, which flux grid -- copied straight from that cube's own
+    primary header, so a flux map is never separable from the data it came from.
+    """
+    hdr = fits.Header()
+    _kw(hdr, 'ORIGIN', 'embin.py', 'emccd_bintool')
+    _kw(hdr, 'DATE', datetime.now().isoformat(timespec='seconds'), 'File creation date (local)')
+    _comment(hdr, '--- provenance --------------------------------------------')
+    _comment(hdr, 'Every extension of this file is a FIT to the histogram cube')
+    _comment(hdr, 'named below, and holds no information that cube does not.')
+    _comment(hdr, 'Regenerate with:  embin.flux_maps_from_cube(CUBEFILE)')
+    _kw(hdr, 'CUBEFILE', os.path.basename(cube_file) if cube_file else '',
+        'Histogram cube these maps were fitted from')
+
+    # The cube's own record of the run -- frames, bin edges, detector constants,
+    # flux grid -- is carried over verbatim rather than re-derived, so the two
+    # files can never disagree about what was fitted.
+    if cube_header is not None:
+        carry = (['NFRAMES', 'FIRSTIDX', 'FIRSTIMG', 'LASTIMG', 'NBIN', 'NEDGE']
+                 + [f'BINEDG{i:02d}' for i in range(int(cube_header.get('NEDGE', 0)))]
+                 + ['SATADU', 'BIAS', 'RON', 'GAIN', 'FULLWELL', 'NMAX', 'CIC',
+                    'MUMIN', 'MUMAX', 'MUNGRID', 'FITCHUNK'])
+        _comment(hdr, '--- copied from the cube file -----------------------------')
+        for key in carry:
+            if key in cube_header:
+                _kw(hdr, key, cube_header[key], cube_header.comments[key])
+
+    hdus = [fits.PrimaryHDU(header=hdr)]
+
+    flux_hdr = fits.Header()
+    _kw(flux_hdr, 'EXTNAME', 'FLUX', 'Per-pixel mean flux')
+    _kw(flux_hdr, 'BUNIT', 'e-/frame', 'Electrons per frame per pixel')
+    _comment(flux_hdr, "Maximum-likelihood mean flux, fitted from each pixel's")
+    _comment(flux_hdr, 'own histogram in the cube file, using emccd_histo.py.')
+    hdus.append(fits.ImageHDU(data=np.asarray(flux, dtype=np.float32), header=flux_hdr))
+
+    err_hdr = fits.Header()
+    _kw(err_hdr, 'EXTNAME', 'FLUX_ERR', 'Error on the per-pixel mean flux')
+    _kw(err_hdr, 'BUNIT', 'e-/frame', 'Electrons per frame per pixel')
+    _comment(err_hdr, 'Symmetrised 1-sigma statistical error on FLUX, i.e. half')
+    _comment(err_hdr, 'the width of the delta-log-likelihood = 0.5 interval,')
+    _comment(err_hdr, '(MU_HI - MU_LO) / 2. It is a COUNTING error only: it says')
+    _comment(err_hdr, 'how well NFRAMES frames pin down this pixel own flux under')
+    _comment(err_hdr, 'the model, and knows nothing of flat-field or PSF errors.')
+    hdus.append(fits.ImageHDU(data=np.asarray(flux_err, dtype=np.float32), header=err_hdr))
+
+    if mu_lo is not None and mu_hi is not None:
+        for name, data, what in (('MU_LO', mu_lo, 'Lower'), ('MU_HI', mu_hi, 'Upper')):
+            h = fits.Header()
+            _kw(h, 'EXTNAME', name, f'{what} 1-sigma flux bound')
+            _kw(h, 'BUNIT', 'e-/frame', 'Electrons per frame per pixel')
+            _comment(h, f'{what} bound of the delta-log-likelihood = 0.5 interval,')
+            _comment(h, 'before it is symmetrised into FLUX_ERR. The interval is')
+            _comment(h, 'genuinely asymmetric at low flux, where mu is bounded by 0.')
+            hdus.append(fits.ImageHDU(data=np.asarray(data, dtype=np.float32), header=h))
+
+    _write(hdus, path, overwrite)
+
+
+# ---------------------------------------------------------------------------
+# Reading back -- a cube file is self-describing
+# ---------------------------------------------------------------------------
+# The cube file stores no fitted quantity, so reading one is where the mean and
+# its error come from. These three functions are the whole public reader: they
+# take a file path and nothing else, because the primary header written above
+# carries the bin edges, the detector constants and the flux grid.
+def edges_from_header(hdr):
+    """The bin edges [ADU] of a cube file, from its BINEDGnn keywords."""
+    n_edge = int(hdr['NEDGE']) if 'NEDGE' in hdr else int(hdr['NBIN']) + 1
+    try:
+        edges = [float(hdr[f'BINEDG{i:02d}']) for i in range(n_edge)]
+    except KeyError as exc:
+        raise KeyError(f'{exc} missing: this header does not describe its own binning') from exc
+    return np.asarray(edges, dtype=np.float64)
+
+
+def config_from_header(hdr):
+    """Rebuild the pieces of the YAML configuration that a re-fit needs.
+
+    The result has the same shape as the parsed YAML -- 'detector', 'histogram'
+    and 'fit' sections -- so it drops straight into make_model_config(),
+    build_flux_grid() and fit_flux_image(), and a caller with the original YAML
+    in hand can use that instead, interchangeably.
+    """
+    return {
+        'detector': {
+            'bias': float(hdr['BIAS']),
+            'ron': float(hdr['RON']),
+            'gain': float(hdr['GAIN']),
+            'full_well': int(hdr['FULLWELL']),
+            'nmax': int(hdr['NMAX']),
+            'cic': float(hdr.get('CIC', 0.0)),
+        },
+        'histogram': {'edges': edges_from_header(hdr).tolist()},
+        'fit': {
+            'mu_min': float(hdr.get('MUMIN', 1e-4)),
+            'mu_max': float(hdr.get('MUMAX', 10.0)),
+            'n_grid': int(hdr.get('MUNGRID', 2000)),
+            'chunk_size': int(hdr.get('FITCHUNK', 2048)),
+            'asymmetric_bounds': bool(hdr.get('MUBOUNDS', False)),
+        },
+    }
+
+
+def read_cube(path):
+    """Open a cube file and return (cube, edges, cfg, primary_header).
+
+    cube  : int array (nbin, ny, nx), the per-pixel histogram
+    edges : float array (nbin + 1), the bin edges [ADU]
+    cfg   : configuration dict rebuilt from the header (config_from_header)
+    hdr   : the primary header itself, for anything else the caller wants
+    """
+    with fits.open(path) as hdul:
+        hdr = hdul[0].header.copy()
+        cube = np.asarray(hdul['HISTCUBE'].data)
+    edges = edges_from_header(hdr)
+    if cube.shape[0] != len(edges) - 1:
+        raise ValueError(f'{path}: HISTCUBE has {cube.shape[0]} planes but the header '
+                         f'describes {len(edges) - 1} bins')
+    return cube, edges, config_from_header(hdr), hdr
+
+
+def flux_maps_from_cube(path, nll_grid=None, cfg=None):
+    """The mean-flux map and its error, fitted from a cube file.
+
+    THIS is the function that turns the archived histogram cube back into the
+    two maps a user actually wants:
+
+        flux, flux_err, mu_lo, mu_hi = flux_maps_from_cube('embin_cube.fits')
+
+    flux and flux_err are 2-D [e-/frame]; mu_lo/mu_hi are the raw asymmetric
+    delta-log-likelihood = 0.5 bounds that flux_err is the half-width of.
+    Nothing but the file is needed: the detector constants and the flux grid
+    come out of its own primary header. Pass `cfg` to override them (e.g. to
+    re-fit on a wider grid), or a prebuilt `nll_grid` from build_flux_grid()
+    to fit many cubes that share one binning without rebuilding it each time.
+    """
+    cube, edges, header_cfg, _ = read_cube(path)
+    cfg = header_cfg if cfg is None else cfg
+    log(f'read {cube.shape[0]}-bin cube {cube.shape[2]} x {cube.shape[1]} from '
+        f'{os.path.basename(path)} ({int(cube.sum()):,} binned values)', 'value')
+    return fit_flux_image(cube, edges, cfg, nll_grid=nll_grid)
+
+
+def cube_to_flux_file(cube_path, flux_path=None, nll_grid=None, overwrite=True):
+    """Fit a cube file and write the two-extension flux file beside it.
+
+    The default output name is the cube's, with '_flux' before the extension.
+    Returns (flux_path, flux, flux_err).
+    """
+    if flux_path is None:
+        flux_path = flux_path_for(cube_path)
+    cube, edges, cfg, hdr = read_cube(cube_path)
+    log(f'fitting {cube.shape[1] * cube.shape[2]:,} pixels of '
+        f'{os.path.basename(cube_path)} ...')
+    flux, flux_err, mu_lo, mu_hi = fit_flux_image(cube, edges, cfg, nll_grid=nll_grid)
+    if not cfg.get('fit', {}).get('asymmetric_bounds', False):
+        mu_lo = mu_hi = None
+    write_flux_mef(flux_path, flux, flux_err, mu_lo, mu_hi,
+                   cube_header=hdr, cube_file=cube_path, overwrite=overwrite)
+    return flux_path, flux, flux_err
 
 
 # ---------------------------------------------------------------------------
@@ -764,12 +1024,27 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     default_cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'embin_config.yaml')
     parser.add_argument('--config', '-c', default=default_cfg, help='YAML configuration file')
-    parser.add_argument('--output', '-o', default=None, help='Override output.file from the config')
+    parser.add_argument('--output', '-o', default=None,
+                        help='Override output.cube_file from the config')
+    parser.add_argument('--flux-output', default=None,
+                        help='Override the flux file name (default: the cube name + _flux)')
+    parser.add_argument('--from-cube', default=None, metavar='CUBE.fits',
+                        help='Skip the frames entirely: re-fit an existing cube file, '
+                             'using only what its own header says, and write the flux file')
     parser.add_argument('--first', type=int, default=None,
                         help='Override input.first_file: 0-based index of the first frame to use')
     parser.add_argument('--n-files', type=int, default=None,
                         help='Override input.n_files: how many frames to use from that index on')
     args = parser.parse_args()
+
+    # --- the reader-only path ---------------------------------------------
+    if args.from_cube:
+        log(f'refitting the cube in {args.from_cube} (no configuration file needed)')
+        out, flux, flux_err = cube_to_flux_file(args.from_cube, args.flux_output)
+        log(f'flux map: median {np.median(flux):.4f}, max {flux.max():.3f} e-/frame; '
+            f'median error {np.median(flux_err):.4f} e-/frame', 'value')
+        log('done')
+        return
 
     log(f'reading configuration from {args.config}')
     cfg = load_config(args.config)
@@ -780,6 +1055,10 @@ def main():
     edges = get_edges(cfg)
     hdu_index = cfg['input'].get('hdu', 0)
     files = find_files(cfg)
+
+    compress = bool(cfg.get('output', {}).get('compress', True))
+    cube_path = gz_path(_resolve(cfg, output_path(cfg, args.output)), compress)
+    flux_path = gz_path(args.flux_output or flux_path_for(cube_path), compress)
 
     log(f'{len(edges) - 1} histogram bins from {edges[0]:g} to {edges[-2]:g} ADU '
         f'(last bin open-ended)', 'value')
@@ -792,8 +1071,12 @@ def main():
         f'({n_under:,} below the first edge, {n_over:,} in the open last bin)', 'value')
 
     # --- 2. flux map and its error ----------------------------------------
+    # Fitted here, but written to the SEPARATE flux file below: the cube file
+    # keeps only the measurement. Both the source detection of step 3 and that
+    # flux file need these maps, so they are computed once.
     flux = flux_err = mu_lo = mu_hi = None
-    if cfg.get('fit', {}).get('enabled', True):
+    fit_enabled = cfg.get('fit', {}).get('enabled', True)
+    if fit_enabled:
         log('[2/4] fitting the mean flux of every pixel ...')
         flux, flux_err, mu_lo, mu_hi = fit_flux_image(cube, edges, cfg)
         log(f'flux map: median {np.median(flux):.4f}, '
@@ -804,7 +1087,8 @@ def main():
         if not cfg.get('fit', {}).get('asymmetric_bounds', False):
             mu_lo = mu_hi = None
     else:
-        log('[2/4] flux fit disabled in the configuration - skipping', 'warn')
+        log('[2/4] flux fit disabled in the configuration - '
+            'writing the cube file only, no flux file', 'warn')
 
     # --- 3. sources and raw stamps ----------------------------------------
     sources, stamps = [], []
@@ -822,12 +1106,16 @@ def main():
     else:
         log('[3/4] source detection skipped (no flux map, or disabled)', 'warn')
 
-    # --- 4. write ----------------------------------------------------------
-    log('[4/4] writing the output MEF ...')
-    out_path = _resolve(cfg, output_path(cfg, args.output))
-    write_mef(out_path, cfg, files, edges, cube, flux, flux_err, mu_lo, mu_hi,
-              sources, stamps, n_under, n_over,
-              overwrite=bool(cfg.get('output', {}).get('overwrite', True)))
+    # --- 4. write the two files -------------------------------------------
+    log('[4/4] writing the cube file and the flux file ...')
+    overwrite = bool(cfg.get('output', {}).get('overwrite', True))
+    write_cube_mef(cube_path, cfg, files, edges, cube, sources, stamps,
+                   n_under, n_over,
+                   flux_file=flux_path if fit_enabled else None, overwrite=overwrite)
+    if flux is not None:
+        write_flux_mef(flux_path, flux, flux_err, mu_lo, mu_hi,
+                       cube_header=fits.getheader(cube_path, 0), cube_file=cube_path,
+                       overwrite=overwrite)
     log('done')
 
 

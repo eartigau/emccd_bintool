@@ -1,6 +1,6 @@
 # emccd_bintool
 
-Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
+[Etienne Artigau](https://orcid.org/0000-0003-3506-5667), [Galina Sherren](https://orcid.org/0009-0006-5677-3944), [Rene Doyon](https://orcid.org/0000-0001-5485-4675), Jonathan St-Antoine
 (Universite de Montreal / Observatoire du Mont-Megantic)
 
 **Three things live in this repository.**
@@ -178,30 +178,62 @@ want it elsewhere).
 
 | File | What it is |
 |---|---|
-| `embin_chunk00.fits` ... | one file per chunk of frames, described below |
-| `chunk_summary.fits` | all the chunks stitched together, plus the light curves |
+| `embin_chunk00.fits.gz` ... | one cube file per chunk of frames, described below |
+| `embin_chunk00_flux.fits.gz` ... | the mean flux and its error for that chunk, in two extensions |
+| `chunk_summary.fits.gz` | all the chunks stitched together, plus the light curves |
 | `figures/chunk_lightcurves.pdf` | flux of every tracked star versus time |
 | `figures/chunk_drift.pdf` | how far the field moved during the sequence |
 | `figures/chunk_flux_maps.pdf` | the flux map of each chunk, side by side |
 | `astrometry_stack.fits` | only after `pesto_astrometry.py`: the stacked, solved image with its WCS |
 | `figures/astrometry.pdf` | only after `pesto_astrometry.py`: the solved field against Gaia |
 
-Each `embin_chunkNN.fits` is a multi-extension FITS file. Open it with
+Each chunk comes as two files, and the split is deliberate: the histogram cube
+is the measurement, the flux map is one reduction of it.
+
+`embin_chunkNN.fits.gz` is the **cube file**, the one to archive. Everything is
+written gzipped: astropy compresses and decompresses on the file name alone, so
+nothing you do with these files changes, and `gunzip` gives an ordinary FITS.
+It pays here, because a histogram cube is small counts and empty sky: 7.0 MB of
+data becomes 0.75 MB on disk. Set `output.compress: false` for plain `.fits`.
+Open one with
 
 ```bash
-python -c "from astropy.io import fits; fits.open('data_bin/embin_chunk00.fits').info()"
+python -c "from astropy.io import fits; fits.open('data_bin/embin_chunk00.fits.gz').info()"
 ```
 
 and you will see:
 
 | Extension | Shape | Contents |
 |---|---|---|
-| `PRIMARY` | no data | a header recording every setting of the run: the bin edges, the detector constants, which frames went in |
-| `FLUX` | (426, 1024) | the fitted mean flux of each pixel, in electrons per frame |
-| `FLUX_ERR` | (426, 1024) | the 1-sigma error on that flux, same units |
-| `HISTCUBE` | (16, 426, 1024) | the histograms: plane *b* holds, for each pixel, how many frames fell in bin *b* |
+| `PRIMARY` | no data | a header recording every setting of the run: the bin edges, the detector constants, the flux grid, which frames went in |
+| `HISTCUBE` | (16, 426, 1024) | the histograms: plane *b* holds, for each pixel, how many frames fell in bin *b*. Stored in the narrowest integer type a count out of *N* frames can need: `uint8` below 256 frames, `uint16` below 65536, `int32` above |
 | `HEADERS` | table | one row per input frame, one column per FITS keyword, so the timestamps survive |
 | `STAMP01`, `STAMP02`, ... | (64, 16, 16) | the raw, unbinned ADU values of every frame in a small box around each detected star |
+
+Nothing fitted is in there. `embin_chunkNN_flux.fits` is the **flux file**:
+
+| Extension | Shape | Contents |
+|---|---|---|
+| `PRIMARY` | no data | provenance: `CUBEFILE` names the cube above, and the bin edges, detector constants and flux grid are copied from its header |
+| `FLUX` | (426, 1024) | the fitted mean flux of each pixel, in electrons per frame |
+| `FLUX_ERR` | (426, 1024) | the 1-sigma error on that flux, same units |
+
+Both maps are fits to the cube beside them and hold nothing it does not, so a
+flux file is never the only copy of anything. Delete one and rebuild it from the
+cube alone, with no frames and no configuration file:
+
+```bash
+python embin.py --from-cube data_bin/embin_chunk00.fits.gz
+```
+
+```python
+from embin import flux_maps_from_cube
+flux, flux_err, mu_lo, mu_hi = flux_maps_from_cube('data_bin/embin_chunk00.fits.gz')
+```
+
+That reader is also how anything else should get a mean out of these files: the
+cube's own header carries the bias, the read noise, the gain and the bin edges,
+so `flux_maps_from_cube` needs nothing but the path.
 
 `chunk_summary.fits` holds the same flux maps stacked in time, `(15, 426, 1024)`,
 plus three tables: `CHUNKS` (which frames and which times each plane covers),
@@ -284,8 +316,10 @@ and there is no astrometric solution to be had at all. So `embin.py` and
 the other. If the astrometry fails, the binning products are still complete.
 
 The astrometry writes its solution into **every** product, not just the summary:
-each `embin_chunkNN.fits` gets the WCS in its primary header and in `FLUX`,
-`FLUX_ERR` and `HISTCUBE`. Every chunk keeps the same CD matrix and the same
+each `embin_chunkNN.fits.gz` gets the WCS in its primary header and in
+`HISTCUBE`, and each `embin_chunkNN_flux.fits.gz` in its primary header and in
+`FLUX` and `FLUX_ERR`, so the cube and the maps fitted from it look at the
+same sky. Every chunk keeps the same CD matrix and the same
 central `CRPIX`; only `CRVAL` moves, by that chunk's measured drift, because
 that is the only thing the drift actually changes. `HISTCUBE`'s third axis is
 labelled `CTYPE3 = 'BIN'`, so no WCS-aware reader invents a sky meaning for it.
@@ -373,6 +407,42 @@ Two rules that matter more than they look:
 
 ---
 
+## Command-line options
+
+Everything below has a home in `embin_config.yaml`, and that is where a setting
+you always want belongs. The flags are for the one-off: a quick test, a rerun
+with a different chunk size, a file written somewhere else.
+
+`run_chunks.py`, the program you normally run:
+
+| Flag | What it does |
+|---|---|
+| `-c`, `--config FILE` | read a different YAML than `embin_config.yaml` |
+| `--chunk-size N` | frames per chunk, overriding `chunks.size` |
+| `--n-chunks N` | stop after N chunks; this is the flag for a two-chunk test |
+| `--outdir DIR` | write the results somewhere other than `output.directory` |
+| `--aperture R` | light-curve aperture radius in pixels |
+| `--match-radius R` | how far a star may move between chunks and still be the same star |
+| `--no-stamps` | skip the raw postage stamps. Much smaller files, and the frames are read only once |
+
+`embin.py`, one set of frames on its own:
+
+| Flag | What it does |
+|---|---|
+| `-c`, `--config FILE` | as above |
+| `-o`, `--output FILE` | override `output.cube_file` |
+| `--flux-output FILE` | override the flux file name, which otherwise follows the cube's |
+| `--from-cube CUBE` | do not read any frames: re-fit an existing cube file from its own header, and write the flux file next to it |
+| `--first N` | 0-based index of the first frame to use |
+| `--n-files N` | how many frames to use from there on |
+
+`--from-cube` is the one worth remembering. It needs neither the frames nor a
+configuration file, because the cube's header already carries the bin edges, the
+detector constants and the flux grid, so it is how you rebuild a flux map you
+deleted, or refit an archived cube years later with a better model.
+
+---
+
 ## When something goes wrong
 
 | What you see | What it means |
@@ -399,13 +469,14 @@ Two rules that matter more than they look:
 | `run_pipeline.py` | the wrapper: binning, then astrometry, in one command |
 | `pesto_astrometry.py` | optional: solves the field and puts a WCS on the results |
 | `demo_optimal_bins.py` | a standalone demonstration of the whole argument, including a Monte Carlo check |
+| `plot_bins.py` | draws the bin edges on top of a real pixel-value histogram |
 | `docs/` | the project web page (password protected) |
 
 ---
 
 ## Authors and credits
 
-Etienne Artigau, Galina Sherren, Rene Doyon, Jonathan St-Antoine
+[Etienne Artigau](https://orcid.org/0000-0003-3506-5667), [Galina Sherren](https://orcid.org/0009-0006-5677-3944), [Rene Doyon](https://orcid.org/0000-0001-5485-4675), Jonathan St-Antoine
 (Universite de Montreal and Observatoire du Mont-Megantic).
 
 The detector constants come from the `pesto_stats` calibration of the PESTO

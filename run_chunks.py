@@ -20,8 +20,13 @@ This script therefore cuts the sequence into contiguous CHUNKS of
 then stitches the chunk results into one time-resolved product. Everything lands
 in the folder named by `output.directory` in the YAML (`data_bin` by default):
 
-  * embin_chunk00.fits, embin_chunk01.fits, ... -- one complete embin result per
-    chunk: histogram cube, flux map, error map, header table, raw star stamps;
+  * embin_chunk00.fits, embin_chunk01.fits, ... -- one CUBE file per chunk:
+    the histogram cube, the header table and the raw star stamps, and nothing
+    fitted;
+  * embin_chunk00_flux.fits, ... -- one FLUX file per chunk: that chunk's mean
+    flux map and its error, in two extensions. These are fits to the cube
+    beside them, so they need not be archived: embin.flux_maps_from_cube()
+    rebuilds them from the cube file alone;
   * chunk_summary.fits -- the flux maps of every chunk as one (n_chunk, ny, nx)
     cube, the matching error cube, a table describing each chunk (which frames,
     which times), and the LIGHT CURVES: every star tracked from chunk to chunk,
@@ -60,7 +65,8 @@ from astropy.table import Table
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from embin import (_resolve, all_frames, build_flux_grid,  # noqa: E402
                    build_histogram_cube, detect_sources, extract_stamps,
-                   fit_flux_image, get_edges, load_config, log, write_mef)
+                   fit_flux_image, flux_path_for, get_edges, gz_path,
+                   load_config, log, write_cube_mef, write_flux_mef)
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +284,7 @@ def write_summary(path, cfg, edges, chunks, flux_cube, err_cube, tracks,
         'median_err': np.array([c['median_err'] for c in chunks]),
         'n_sources': np.array([c['n_sources'] for c in chunks], dtype=np.int32),
         'file': [c['file'] for c in chunks],
+        'flux_file': [c['flux_file'] for c in chunks],
     })
     ctab['t_start'].unit = ctab['t_mid'].unit = ctab['t_end'].unit = 's'
     hdus.append(fits.BinTableHDU(ctab, name='CHUNKS'))
@@ -443,8 +450,11 @@ def main(argv=None):
     outdir = args.outdir or _resolve(cfg, out_cfg.get('directory', 'data_bin'))
     figdir = os.path.join(outdir, str(out_cfg.get('figures', 'figures')))
     prefix = str(out_cfg.get('chunk_prefix', 'embin_chunk'))
-    summary_name = str(out_cfg.get('summary', 'chunk_summary.fits'))
     overwrite = bool(out_cfg.get('overwrite', True))
+    # Every product is gzipped unless the config says otherwise: these files are
+    # mostly small counts and empty sky, and compress by an order of magnitude.
+    compress = bool(out_cfg.get('compress', True))
+    summary_name = gz_path(str(out_cfg.get('summary', 'chunk_summary.fits')), compress)
 
     if size < 2:
         log(f'chunks.size = {size} makes no sense; it must be at least 2', 'error')
@@ -515,11 +525,17 @@ def main(argv=None):
                 stamps = extract_stamps(sub, sources, hdu_index)
         per_chunk_sources.append(sources)
 
-        out = os.path.join(outdir, f'{prefix}{c:02d}.fits')
+        out = gz_path(os.path.join(outdir, f'{prefix}{c:02d}.fits'), compress)
+        flux_out = flux_path_for(out)
         cfg['input']['first_file'] = first          # so the MEF header records the chunk
         cfg['input']['n_files'] = size
-        write_mef(out, cfg, sub, edges, cube, flux, flux_err, mu_lo, mu_hi,
-                  sources, stamps, n_under, n_over, overwrite=overwrite)
+        write_cube_mef(out, cfg, sub, edges, cube, sources, stamps, n_under, n_over,
+                       flux_file=flux_out if flux is not None else None,
+                       overwrite=overwrite)
+        if flux is not None:
+            write_flux_mef(flux_out, flux, flux_err, mu_lo, mu_hi,
+                           cube_header=fits.getheader(out, 0), cube_file=out,
+                           overwrite=overwrite)
 
         times = np.array([frame_time(p, hdu_index) for p in (sub[0], sub[-1])]) - t0
         chunks.append({
@@ -530,6 +546,7 @@ def main(argv=None):
             'median_err': float(np.median(flux_err)) if flux_err is not None else np.nan,
             'n_sources': len(sources),
             'file': os.path.basename(out),
+            'flux_file': os.path.basename(flux_out) if flux is not None else '',
         })
 
     # --- light curves ------------------------------------------------------

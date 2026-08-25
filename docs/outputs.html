@@ -65,15 +65,27 @@
             somewhere else, change one line in the settings file:
             <code>output.directory</code>.
           </p>
+          <p>
+            Every file here is gzipped. astropy compresses and decompresses on the file
+            name alone, so <code>fits.open('&hellip;.fits.gz')</code> and DS9 read them with
+            no extra step, and <code>gunzip</code> gives you an ordinary FITS file. It is
+            worth doing systematically: a histogram cube is small counts and empty sky, and
+            7.0 MB of data comes to 0.75 MB on disk. Set
+            <code>output.compress: false</code> for plain <code>.fits</code>.
+          </p>
           <div class="table-wrap">
             <table class="data">
               <tr><th>File</th><th>What it is</th></tr>
               <tr>
-                <td class="mono">embin_chunk00.fits<br />embin_chunk01.fits<br />&hellip;</td>
-                <td>One file per chunk of frames. The full result for those frames: histograms, flux map, error map, star stamps. Described below.</td>
+                <td class="mono">embin_chunk00.fits.gz<br />embin_chunk01.fits.gz<br />&hellip;</td>
+                <td>One cube file per chunk of frames: the histograms, the star stamps, the frame headers. This is the data, and the only thing worth archiving. Described below.</td>
               </tr>
               <tr>
-                <td class="mono">chunk_summary.fits</td>
+                <td class="mono">embin_chunk00_flux.fits.gz<br />embin_chunk01_flux.fits.gz<br />&hellip;</td>
+                <td>The mean flux of that chunk and its error, in two extensions. A fit to the cube beside it, and rebuildable from that cube at any time, so losing one costs nothing but the re-fit.</td>
+              </tr>
+              <tr>
+                <td class="mono">chunk_summary.fits.gz</td>
                 <td>All the chunks stitched together in time, plus the light curves.</td>
               </tr>
               <tr>
@@ -98,33 +110,26 @@
 
         <!-- ─────────────────── one chunk file ───────────────────────── -->
         <section class="card span-2">
-          <h2>Inside one <code>embin_chunkNN.fits</code></h2>
+          <h2>Inside one <code>embin_chunkNN.fits.gz</code></h2>
           <p>
+            Every chunk comes as two files. This one, the <strong>cube file</strong>, holds
+            the measurement and nothing derived from it; the mean flux fitted from it lives
+            beside it in <code class="mono">embin_chunkNN_flux.fits</code>, described below.
             A FITS file can hold several data blocks, called extensions. List them with:
           </p>
-          <div class="codeblock">python -c "from astropy.io import fits; fits.open('data_bin/embin_chunk00.fits').info()"</div>
+          <div class="codeblock">python -c "from astropy.io import fits; fits.open('data_bin/embin_chunk00.fits.gz').info()"</div>
           <div class="table-wrap">
             <table class="data">
               <tr><th>Extension</th><th>Shape</th><th>Contents</th></tr>
               <tr>
                 <td class="mono">PRIMARY</td>
                 <td class="num">no data</td>
-                <td>A header recording every setting of the run: the bin edges, the detector constants, which frames went in, how many values fell in the open top bin. If you ever wonder how a file was made, this is where the answer is.</td>
-              </tr>
-              <tr>
-                <td class="mono">FLUX</td>
-                <td class="num">426 &times; 1024</td>
-                <td>The fitted mean flux of each pixel, in electrons per frame.</td>
-              </tr>
-              <tr>
-                <td class="mono">FLUX_ERR</td>
-                <td class="num">426 &times; 1024</td>
-                <td>The 1-sigma error on that flux, same units.</td>
+                <td>A header recording every setting of the run: the bin edges, the detector constants, the flux grid, which frames went in, how many values fell in the open top bin. If you ever wonder how a file was made, this is where the answer is, and it is also complete enough to redo the flux fit from this file alone.</td>
               </tr>
               <tr>
                 <td class="mono">HISTCUBE</td>
                 <td class="num">16 &times; 426 &times; 1024</td>
-                <td>The histograms themselves. Plane <em>b</em> holds, for every pixel, how many frames of this chunk fell in bin <em>b</em>. This is the compressed data: 16 numbers per pixel instead of 64 frames.</td>
+                <td>The histograms themselves. Plane <em>b</em> holds, for every pixel, how many frames of this chunk fell in bin <em>b</em>. This is the compressed data: 16 numbers per pixel instead of 64 frames, and one byte each, since a count of 64 frames cannot exceed 255. Above 255 frames the type widens to <code>uint16</code>, above 65535 to <code>int32</code>.</td>
               </tr>
               <tr>
                 <td class="mono">HEADERS</td>
@@ -148,12 +153,39 @@
         </section>
 
         <section class="card">
+          <h2>Inside one <code>embin_chunkNN_flux.fits.gz</code></h2>
+          <p>
+            The <strong>flux file</strong>: the answer, in two extensions.
+          </p>
+          <div class="table-wrap">
+            <table class="data">
+              <tr><th>Extension</th><th>Shape</th><th>Contents</th></tr>
+              <tr>
+                <td class="mono">PRIMARY</td>
+                <td class="num">no data</td>
+                <td>Provenance. <code>CUBEFILE</code> names the cube these maps were fitted from, and the bin edges, detector constants and flux grid are copied from its header, so a flux map is never separable from the data behind it.</td>
+              </tr>
+              <tr>
+                <td class="mono">FLUX</td>
+                <td class="num">426 &times; 1024</td>
+                <td>The fitted mean flux of each pixel, in electrons per frame.</td>
+              </tr>
+              <tr>
+                <td class="mono">FLUX_ERR</td>
+                <td class="num">426 &times; 1024</td>
+                <td>The 1-sigma error on that flux, same units.</td>
+              </tr>
+            </table>
+          </div>
+        </section>
+
+        <section class="card">
           <h2>Getting a flux map out</h2>
           <div class="codeblock">from astropy.io import fits
 import matplotlib.pyplot as plt
 
-f = fits.getdata('data_bin/embin_chunk00.fits', 'FLUX')
-e = fits.getdata('data_bin/embin_chunk00.fits', 'FLUX_ERR')
+f = fits.getdata('data_bin/embin_chunk00_flux.fits.gz', 'FLUX')
+e = fits.getdata('data_bin/embin_chunk00_flux.fits.gz', 'FLUX_ERR')
 
 print(f.shape)          # (426, 1024)
 print(f[300, 700])      # flux of one pixel, e-/frame
@@ -161,15 +193,24 @@ print(f[300, 700])      # flux of one pixel, e-/frame
 plt.imshow(f, origin='lower', vmin=0, vmax=0.5)
 plt.colorbar(label='e-/frame')
 plt.show()</div>
+          <p>
+            Or skip the flux file and fit the cube yourself. It holds everything the fit
+            needs, so this gives the same two maps, to the bit:
+          </p>
+          <div class="codeblock">from embin import flux_maps_from_cube
+
+flux, flux_err, mu_lo, mu_hi = flux_maps_from_cube('data_bin/embin_chunk00.fits.gz')</div>
           <p class="hint">
-            You can also open the file in DS9 and step through the extensions there. The
+            From the shell, <code>python embin.py --from-cube data_bin/embin_chunk00.fits.gz</code>
+            writes the flux file for a cube that has none, or replaces one you deleted. You
+            can also open either file in DS9 and step through the extensions there; the
             <code>HISTCUBE</code> extension will show as a 16-plane cube.
           </p>
         </section>
 
         <!-- ─────────────────── summary file ─────────────────────────── -->
         <section class="card span-3">
-          <h2>Inside <code>chunk_summary.fits</code></h2>
+          <h2>Inside <code>chunk_summary.fits.gz</code></h2>
           <p>
             This is the file to use for anything time-resolved. It holds the flux maps of
             every chunk stacked into one cube, and two tables.
@@ -369,7 +410,7 @@ track 1 and the transit depth will be diluted.</div>
 
       <footer class="footer">
         <p class="authors">
-          &Eacute;tienne Artigau &middot; Galina Sherren &middot; Ren&eacute; Doyon &middot; Jonathan St-Antoine<br />
+          <a href="https://orcid.org/0000-0003-3506-5667" target="_blank" rel="noopener">&Eacute;tienne Artigau</a> &middot; <a href="https://orcid.org/0009-0006-5677-3944" target="_blank" rel="noopener">Galina Sherren</a> &middot; <a href="https://orcid.org/0000-0001-5485-4675" target="_blank" rel="noopener">Ren&eacute; Doyon</a> &middot; Jonathan St-Antoine<br />
           <span class="hint">Universit&eacute; de Montr&eacute;al and Observatoire du Mont-M&eacute;gantic</span>
         </p>
         <p>
