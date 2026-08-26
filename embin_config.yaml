@@ -161,6 +161,49 @@ detector:
                       # in the PESTO data reaches about 3 e-/frame, so 40 is ample.
                       # Raising it costs computing time, lowering it below your
                       # actual fluxes silently biases the fit.
+  # Quadratic non-linearity of the detector, in inverse electrons. The charge
+  # the electronics REPORT, n, and the charge that actually obeys EMCCD
+  # statistics, n_ideal, are related by
+  #
+  #     n_ideal = n + alpha * n^2          [electrons]
+  #
+  # so alpha corrects a measured flux into the one the physics applies to.
+  # 0.0 is a perfectly linear detector. `python embin_mcmc.py` fits it as its
+  # fifth parameter; on the PESTO test night it comes out around -0.04 /e-,
+  # which removes about a quarter of the total chi2 of the histogram fit and
+  # nearly all of it above 700 ADU.
+  #
+  # TWO WARNINGS. First, alpha is strongly degenerate with `gain`: both stretch
+  # the ADU axis and only the curvature of the tail separates them, so a gain
+  # quoted with alpha free is not the same number as one quoted with alpha
+  # fixed at 0. Second, the map n -> n + alpha n^2 stops being monotonic at
+  # n = -1/(2 alpha) when alpha is negative, and the model is meaningless above
+  # that. embin_mcmc.py refuses to sample past it and warns when the turning
+  # point comes close to the brightest pixel fitted.
+  alpha: 0.0
+
+  # Shape of the read-noise distribution. The kernel is a generalised Gaussian,
+  #
+  #     R(v)  proportional to  exp( -|v/a|^beta_r )
+  #
+  # with `a` set from `ron` so that `ron` stays the true standard deviation
+  # whatever beta_r does. beta_r = 2 IS the Gaussian, so the two are nested and
+  # comparing them is an honest likelihood-ratio test. Below 2 the tails are
+  # heavier, above 2 the distribution is flatter-topped and lighter-tailed.
+  #
+  # It is not a Gaussian. On the PESTO test night, freeing beta_r improves the
+  # pooled-histogram fit by delta chi2 = 4800 for its one parameter, and
+  # together with `alpha` it takes chi2/dof from 49 down to 26.
+  #
+  # WHAT THIS KERNEL ACTUALLY DESCRIBES: the read noise convolved with the
+  # spread of per-pixel bias offsets, because a histogram pooled over pixels
+  # cannot separate the two. Measured apart -- from frame-to-frame differences,
+  # in which the per-pixel pedestal cancels exactly -- the read noise alone is
+  # FLATTER-topped than Gaussian (beta_r about 3.6) while the fixed pattern,
+  # 1.14 ADU rms on this detector, puts weight back in the tails. The effective
+  # kernel the pooled fit sees comes out just heavier than Gaussian, near 1.95.
+  beta_r: 2.0
+
   cic: 0.0            # clock-induced charge [e-/frame]. Spurious electrons the
                       # EM register creates by itself. The pesto_stats calibration
                       # does not separate it from the sky flux, so it is left at 0
