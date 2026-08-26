@@ -22,14 +22,6 @@ pooled over every (unmasked) pixel and every frame, and samples the posterior of
     ron    [ADU]      read-out noise, 1 sigma
     gain   [ADU/e-]   mean EM gain
     mu     [e-/frame] the mean flux per pixel
-    alpha  [1/e-]     quadratic non-linearity, n_ideal = n + alpha n^2
-    beta_r [-]        shape of the read-noise distribution, 2 being Gaussian
-
-The last two are not decoration. On the PESTO test night they take chi2/dof of
-the pooled histogram from 49 to 25: alpha is worth a delta chi2 of 4900 and
-beta_r another 4800, for one parameter each. Fixing them at their "ideal
-detector" values (0 and 2) recovers the classical model exactly, so the
-comparison is a nested likelihood-ratio test rather than a matter of taste.
 
 with emcee. Feeding the fitted detector through `bin_optimizer.design_bins`, it
 then prints the optimal histogram bin edges that detector implies, ready to
@@ -100,25 +92,11 @@ signal chain (Poisson -> Gamma -> Gaussian -> digitise): the model and the
 simulated histogram agree to within the Monte Carlo noise over the whole range
 where the simulation has counts.
 
-WHAT IS STILL MISSING
----------------------
-chi2/dof is 25, not 1, and the residual is not where you might guess. It is not
-in the tail, which alpha fixes: it is concentrated in about 25 ADU bins at the
-junction where the read-noise peak meets the single-electron shoulder. Freeing
-beta_r halves that pile, and what remains is presumably the fact that a single
-generalised Gaussian is still a caricature of read noise plus fixed pattern.
-
-Note also that alpha and gain are ~94 % anti-correlated -- both stretch the ADU
-axis, and only the curvature of the tail tells them apart -- so a gain quoted
-with alpha free is NOT the same number as one quoted with alpha fixed at zero.
-The run prints that correlation, and warns when alpha's turning point comes
-close to the brightest pixel fitted.
-
 ABOUT THE ERROR BARS -- READ THIS
 ---------------------------------
-64 frames of a 1024 x 426 detector is 2.8e7 pixel values. A six-parameter fit
+64 frames of a 1024 x 426 detector is 2.8e7 pixel values. A four-parameter fit
 to that many samples has formal uncertainties of order 1e-4 of each parameter,
-and NO real detector is described by six numbers to that precision: fixed
+and NO real detector is described by four numbers to that precision: fixed
 pattern in the bias, pixel-to-pixel gain variation, a sky that is not uniform
 and faint stars that the mask did not catch all push chi2/dof well above 1.
 
@@ -142,7 +120,7 @@ import numpy as np
 from astropy.io import fits
 from scipy.optimize import minimize
 from scipy.signal import fftconvolve
-from scipy.special import gamma as _gammafn, ive
+from scipy.special import erf, ive
 
 # embin.py holds the configuration loader, the path resolution rules and the
 # timestamped logger the whole toolkit prints through; bin_optimizer.py turns a
@@ -159,28 +137,15 @@ _SQRT2 = np.sqrt(2.0)
 # The four sampled parameters, in chain order. `mu` is sampled as its natural
 # logarithm (a flux is a positive scale, and its prior is log-uniform), so the
 # chain carries ln(mu) and every report converts back.
-PARAM_NAMES = ['bias', 'ron', 'gain', 'mu', 'alpha', 'beta_r']
+PARAM_NAMES = ['bias', 'ron', 'gain', 'mu']
 PARAM_LABELS = [r'bias  [ADU]', r'RON  [ADU]', r'gain  [ADU/e$^-$]',
-                r'$\mu$  [e$^-$/frame]', r'$\alpha$  [1/e$^-$]',
-                r'$\beta_R$']
-
-
-def nonlinear_limit(alpha):
-    """Electron count at which n -> n + alpha n^2 stops being monotonic.
-
-    For alpha < 0 the map turns over at n = -1/(2 alpha) and everything above
-    that is nonsense: two different measured signals map to the same ideal one.
-    For alpha >= 0 there is no limit. A fit that pushes this limit down inside
-    the range where the data actually has counts is telling you the quadratic
-    is being asked to do more than a mild correction, and the log says so.
-    """
-    return np.inf if alpha >= 0 else -1.0 / (2.0 * alpha)
+                r'$\mu$  [e$^-$/frame]']
 
 
 # ---------------------------------------------------------------------------
 # The model: P(ADU = k) for the EMCCD signal chain
 # ---------------------------------------------------------------------------
-def emccd_pmf(x, bias, ron, gain, mu, alpha=0.0, beta_r=2.0, du=0.25):
+def emccd_pmf(x, bias, ron, gain, mu, du=0.25):
     """Probability of each integer ADU value in `x`, for one set of constants.
 
     Parameters
@@ -190,10 +155,6 @@ def emccd_pmf(x, bias, ron, gain, mu, alpha=0.0, beta_r=2.0, du=0.25):
     ron   : float             read-out noise, 1 sigma [ADU]
     gain  : float             mean EM gain [ADU/e-]
     mu    : float             mean flux [e-/frame], sky + CIC
-    alpha : float             quadratic non-linearity [1/e-]; see below. 0
-                              recovers the strictly linear detector.
-    beta_r: float             shape exponent of the read-noise distribution;
-                              2 is exactly Gaussian. See below.
     du    : float             step of the internal grid the EM continuum is
                               tabulated on, in ADU, before it is convolved with
                               the read noise. 0.25 keeps the discretisation
@@ -211,45 +172,18 @@ def emccd_pmf(x, bias, ron, gain, mu, alpha=0.0, beta_r=2.0, du=0.25):
     exact difference of error functions -- no grid, no interpolation, which
     matters because that term IS the peak and carries most of the counts. Only
     the smooth n >= 1 continuum goes through the numerical convolution.
-
-    THE NON-LINEARITY. A real detector does not convert charge to counts on a
-    perfectly straight line. The convention here is the one the rest of the
-    toolkit uses,
-
-        n_ideal = n_measured + alpha * n_measured^2      [electrons]
-
-    i.e. `alpha` corrects what you measured into the quantity that obeys EMCCD
-    statistics. It is applied to the amplified charge BEFORE the read noise,
-    because that is where the non-linearity of the output stage sits: the
-    read-noise peak itself is untouched (no charge, nothing to compress), which
-    is what leaves bias and RON as well determined as they were.
-
-    Mathematically it is a change of variables on the continuum, so the density
-    picks up the Jacobian dn_ideal/dn_measured = 1 + 2 alpha n. That Jacobian
-    is also the catch: for alpha < 0 it vanishes at n = -1/(2 alpha), beyond
-    which the map is no longer monotonic and the model is meaningless. The
-    caller is expected to keep the fit away from there; log_nonlinear_limit()
-    below says where 'there' is.
     """
     # --- the n >= 1 continuum, on a fine grid of u = (ADU - bias) ------------
     umax = x[-1] - bias + 8.0 * ron
     u = np.arange(0.0, umax, du)
     cont = np.zeros_like(u)
-
-    # The measured electron count on the grid, and the ideal one it maps to.
-    n_meas = u / gain
-    n_ideal = n_meas + alpha * n_meas * n_meas
-    jac = 1.0 + 2.0 * alpha * n_meas
-    u_ideal = n_ideal * gain
-
+    pos = u > 0
     # ive(1, y) is I_1(y) exp(-|y|), and the exponent below is what is left of
     # exp(-mu - u/G) exp(+2 sqrt(mu u / G)) once that exp(-y) is folded in:
     # a perfect square, so nothing ever overflows however bright the pixel.
-    pos = (u > 0) & (jac > 0) & (u_ideal > 0)
-    cont[pos] = (np.sqrt(mu / (gain * u_ideal[pos]))
-                 * ive(1, 2.0 * np.sqrt(mu * u_ideal[pos] / gain))
-                 * np.exp(-(np.sqrt(u_ideal[pos] / gain) - np.sqrt(mu)) ** 2)
-                 * jac[pos])
+    cont[pos] = (np.sqrt(mu / (gain * u[pos]))
+                 * ive(1, 2.0 * np.sqrt(mu * u[pos] / gain))
+                 * np.exp(-(np.sqrt(u[pos] / gain) - np.sqrt(mu)) ** 2))
     cont[0] = (mu / gain) * np.exp(-mu)      # the finite u -> 0+ limit
 
     # Trapezoid weights: the u = 0 sample sits on the edge of the integration
@@ -258,51 +192,17 @@ def emccd_pmf(x, bias, ron, gain, mu, alpha=0.0, beta_r=2.0, du=0.25):
     w = np.full_like(cont, du)
     w[0] = 0.5 * du
 
-    # The zero-electron term is a delta at the bias. It goes on the same grid
-    # as the continuum, weighted by its own probability, so that ONE convolution
-    # below handles both terms with the same read-noise kernel -- which matters
-    # once that kernel stops being a Gaussian with a closed-form integral.
-    src = cont * w
-    src[0] += np.exp(-mu)
-
     # --- read noise and digitisation, in one kernel -------------------------
-    # K(v) is the probability that a true value u is recorded as the integer
-    # ADU u + v: the read-noise density integrated over the 1-ADU bin, not
-    # sampled at its centre. At 2.8e7 samples that difference is larger than
-    # the Poisson noise, so it has to be the integral -- here done by
-    # convolving with a boxcar one ADU wide.
-    #
-    # THE SHAPE. Read noise is not Gaussian, and on this detector the deviation
-    # is not subtle: a generalised Gaussian
-    #
-    #     R(v)  proportional to  exp(-|v/a|^beta_r)
-    #
-    # beats a Gaussian on the pooled histogram by a delta chi2 of 4800 for its
-    # one extra parameter. beta_r = 2 IS the Gaussian, so the two are nested and
-    # the comparison is an honest likelihood-ratio test; beta_r < 2 is
-    # heavier-tailed, beta_r > 2 flatter-topped and lighter-tailed. `a` is set
-    # from `ron` so that `ron` remains the true standard deviation whatever
-    # beta_r does, which keeps it the same number it always was.
-    #
-    # What this kernel describes is the EFFECTIVE one: the read noise proper,
-    # convolved with the spread of per-pixel bias offsets, because a histogram
-    # pooled over pixels cannot separate the two. Measured apart -- from
-    # frame-to-frame differences, in which the per-pixel pedestal cancels
-    # exactly -- the read noise alone is flatter-topped than Gaussian
-    # (beta_r ~ 3.6) and the fixed pattern is what puts the weight back in the
-    # tails, leaving the effective kernel just heavier than Gaussian.
-    half = int(np.ceil(10.0 * ron / du))
+    # K(v) is the probability that a true value u lands in the 1-ADU-wide
+    # integer bin centred u + v: a Gaussian of width `ron` integrated over the
+    # bin, not sampled at its centre. At 2.8e7 samples the difference between
+    # the two is larger than the Poisson noise, so it has to be the integral.
+    half = int(np.ceil(6.0 * ron / du))
     v = np.arange(-half, half + 1) * du
-    a_r = ron * np.sqrt(_gammafn(1.0 / beta_r) / _gammafn(3.0 / beta_r))
-    kernel = np.exp(-np.abs(v / a_r) ** beta_r)
-    n_box = max(int(round(1.0 / du)), 1)
-    kernel = fftconvolve(kernel, np.ones(n_box), mode='same')
-    total_k = kernel.sum()
-    if not np.isfinite(total_k) or total_k <= 0:
-        return np.zeros_like(x)
-    kernel /= total_k
+    kernel = 0.5 * (erf((v + 0.5) / (ron * _SQRT2))
+                    - erf((v - 0.5) / (ron * _SQRT2)))
 
-    conv = fftconvolve(src, kernel, mode='full')
+    conv = fftconvolve(cont * w, kernel, mode='full')
     conv_grid = np.arange(len(conv)) * du + (u[0] + v[0])
 
     # --- evaluate at the data's ADU values ----------------------------------
@@ -310,7 +210,11 @@ def emccd_pmf(x, bias, ron, gain, mu, alpha=0.0, beta_r=2.0, du=0.25):
     # `bias` a continuous parameter. Rounding it to the nearest integer ADU, as
     # a shift-the-array implementation has to, puts steps in the likelihood
     # that an MCMC walks straight into.
-    return np.interp(x - bias, conv_grid, conv, left=0.0, right=0.0)
+    xx = x - bias
+    p_zero = 0.5 * (erf((xx + 0.5) / (ron * _SQRT2))
+                    - erf((xx - 0.5) / (ron * _SQRT2)))
+    return (np.exp(-mu) * p_zero
+            + np.interp(xx, conv_grid, conv, left=0.0, right=0.0))
 
 
 # ---------------------------------------------------------------------------
@@ -443,35 +347,24 @@ class Posterior:
     magnitude is not known in advance.
     """
 
-    def __init__(self, x, counts, priors, du, fit_alpha=True):
+    def __init__(self, x, counts, priors, du):
         self.x = x
         self.counts = counts
         self.du = du
-        self.fit_alpha = fit_alpha
         self.bias_lo, self.bias_hi = priors['bias']
         self.ron_lo, self.ron_hi = priors['ron']
         self.gain_lo, self.gain_hi = priors['gain']
         self.lnmu_lo = np.log(priors['mu'][0])
         self.lnmu_hi = np.log(priors['mu'][1])
-        self.alpha_lo, self.alpha_hi = priors['alpha']
-        self.beta_lo, self.beta_hi = priors['beta_r']
 
     def __call__(self, theta):
-        bias, ron, gain, ln_mu, alpha, beta_r = theta
+        bias, ron, gain, ln_mu = theta
         if not (self.bias_lo < bias < self.bias_hi
                 and self.ron_lo < ron < self.ron_hi
                 and self.gain_lo < gain < self.gain_hi
-                and self.lnmu_lo < ln_mu < self.lnmu_hi
-                and self.alpha_lo < alpha < self.alpha_hi
-                and self.beta_lo < beta_r < self.beta_hi):
+                and self.lnmu_lo < ln_mu < self.lnmu_hi):
             return -np.inf
-        # Hard prior: the non-linearity must stay monotonic over the whole range
-        # that is being fitted. Without this the sampler happily walks past the
-        # turning point, where the model is not a density any more.
-        if nonlinear_limit(alpha) <= (self.x[-1] - bias) / gain:
-            return -np.inf
-        p = emccd_pmf(self.x, bias, ron, gain, np.exp(ln_mu), alpha, beta_r,
-                      du=self.du)
+        p = emccd_pmf(self.x, bias, ron, gain, np.exp(ln_mu), du=self.du)
         total = p.sum()
         if not np.isfinite(total) or total <= 0:
             return -np.inf
@@ -490,11 +383,10 @@ def max_likelihood(post, start):
     """
     res = minimize(lambda t: -post(t), start, method='Nelder-Mead',
                    options={'xatol': 1e-7, 'fatol': 1e-2,
-                            'maxfev': 40000, 'maxiter': 40000})
-    bias, ron, gain, ln_mu, alpha, beta_r = res.x
+                            'maxfev': 20000, 'maxiter': 20000})
+    bias, ron, gain, ln_mu = res.x
     log(f'maximum likelihood: bias={bias:.4f} ADU, ron={ron:.4f} ADU, '
-        f'gain={gain:.4f} ADU/e-, mu={np.exp(ln_mu):.6f} e-/frame, '
-        f'alpha={alpha:+.5f} /e-, beta_R={beta_r:.4f} '
+        f'gain={gain:.4f} ADU/e-, mu={np.exp(ln_mu):.6f} e-/frame '
         f'({res.nfev} evaluations)', 'value')
     return res.x
 
@@ -524,15 +416,16 @@ def _prune_walkers(sampler, tolerance=50.0):
 def run_mcmc(post, start, walkers, steps, burn, thin, seed):
     """Sample the posterior with emcee and return the flattened chain.
 
-    The chain columns are (bias, ron, gain, mu, alpha) -- ln_mu is
-    exponentiated on the way out, so everything downstream sees the flux.
+    The chain columns are (bias, ron, gain, mu) -- ln_mu is exponentiated on
+    the way out, so everything downstream sees the flux itself.
 
     THREE STAGES, not one. Sampling this posterior in a single run does not
-    work: it is narrow, the gain and the non-linearity are almost perfectly
-    degenerate along a curved ridge, and the monotonicity prior cuts that ridge
-    off with a hard wall. Walkers launched in a symmetric ball around the
-    maximum end up spread along and across a banana, some of them outside the
-    wall, and those never come back.
+    work: it is extremely narrow -- 2.8e7 samples behind four parameters -- and
+    the gain trades against the flux along a curved ridge. Walkers launched in a
+    symmetric ball around the maximum end up spread along and across that
+    banana, and the ones that start on the wrong side of it never come back. On
+    the test night ten of thirty-two never found the mode, and every sample they
+    produced was being flattened into the posterior regardless.
 
       1. BURN. Walk from a ball around the maximum-likelihood point, purely to
          find out where the posterior actually is and how wide it is in each
@@ -561,7 +454,7 @@ def run_mcmc(post, start, walkers, steps, burn, thin, seed):
     ndim = len(start)
     # A small ball, scaled to each parameter, so no walker starts outside the
     # prior or in a region where the model is numerically unhappy.
-    scale = np.array([0.01, 0.005, 0.05, 0.01, 0.0005, 0.005])[:ndim]
+    scale = np.array([0.01, 0.005, 0.05, 0.01])[:ndim]
 
     # --- stage 1: burn-in ------------------------------------------------
     sampler = emcee.EnsembleSampler(walkers, ndim, post)
@@ -627,7 +520,7 @@ def run_mcmc(post, start, walkers, steps, burn, thin, seed):
     raw = sampler.get_chain(discard=0, thin=thin)[:, keep, :]
     raw = raw.reshape(-1, ndim)
     chain = np.column_stack([raw[:, 0], raw[:, 1], raw[:, 2],
-                             np.exp(raw[:, 3]), raw[:, 4], raw[:, 5]])
+                             np.exp(raw[:, 3])])
     log(f'{len(chain)} posterior samples kept from '
         f'{int(keep.sum())}/{walkers} walkers', 'value')
     return chain
@@ -652,8 +545,7 @@ def goodness_of_fit(x, counts, theta_med, du):
     Only bins whose expected count exceeds 10 are used, so the statistic stays
     a chi2 rather than a Poisson-in-the-tail curiosity.
     """
-    p = emccd_pmf(x, theta_med[0], theta_med[1], theta_med[2], theta_med[3],
-                  theta_med[4], theta_med[5], du=du)
+    p = emccd_pmf(x, theta_med[0], theta_med[1], theta_med[2], theta_med[3], du=du)
     expect = p / p.sum() * counts.sum()
     ok = expect > 10
     pull = (counts - expect) / np.sqrt(np.maximum(expect, 1.0))
@@ -959,18 +851,16 @@ def yaml_block(summary, design, chi2_dof, cfg):
              '  edges: ' + str(design.edge_list()),
              '',
              'detector:']
-    for name, unit, d in (('bias', 'ADU', 4), ('ron', 'ADU', 4),
-                          ('gain', 'ADU/e-', 4), ('alpha', '1/e-', 5),
-                          ('beta_r', '2 = Gaussian', 4)):
+    for name, unit in (('bias', 'ADU'), ('ron', 'ADU'), ('gain', 'ADU/e-')):
         med, m, p, mi, pi = summary[name]
-        lines.append(f'  {name}: {med:.{d}f}'.ljust(26)
-                     + f'# {unit}, -{mi:.{d}f} +{pi:.{d}f} '
-                       f'(formal -{m:.{d}f} +{p:.{d}f}, inflated by {infl:.1f})')
-    lines += [f'  full_well: {det_cfg.get("full_well", 5000)}'.ljust(26)
+        lines.append(f'  {name}: {med:.4f}'.ljust(24)
+                     + f'# {unit}, -{mi:.4f} +{pi:.4f} '
+                       f'(formal -{m:.4f} +{p:.4f}, inflated by {infl:.1f})')
+    lines += [f'  full_well: {det_cfg.get("full_well", 5000)}'.ljust(24)
               + '# NOT fitted: this night never reaches saturation',
-              f'  nmax: {det_cfg.get("nmax", 40)}'.ljust(26)
+              f'  nmax: {det_cfg.get("nmax", 40)}'.ljust(24)
               + '# NOT fitted: a truncation of embin.py\'s Poisson sum',
-              '  cic: 0.0'.ljust(26)
+              '  cic: 0.0'.ljust(24)
               + '# indistinguishable from the sky flux, kept there']
     med, m, p, mi, pi = summary['mu']
     lines += ['',
@@ -979,11 +869,6 @@ def yaml_block(summary, design, chi2_dof, cfg):
               f'# chi2/dof of this model = {chi2_dof:.1f}; the errors above are '
               f'the formal',
               f'# posterior widths inflated by sqrt(chi2/dof) = {infl:.1f}.',
-              '#',
-              '# `gain` is the value WITH alpha free. The two are strongly '
-              'anti-correlated, so it',
-              '# is NOT comparable to a gain fitted on the assumption that the '
-              'detector is linear.',
               '# ---------------------------------'
               '-------------------------------------']
     return '\n'.join(lines)
@@ -1031,8 +916,7 @@ def main(argv=None):
     du = float(mc.get('grid_step', 0.25))
 
     priors = {'bias': [250.0, 400.0], 'ron': [0.5, 40.0],
-              'gain': [5.0, 500.0], 'mu': [1.0e-6, 10.0],
-              'alpha': [-1.0, 1.0], 'beta_r': [0.8, 8.0]}
+              'gain': [5.0, 500.0], 'mu': [1.0e-6, 10.0]}
     priors.update({k: [float(v[0]), float(v[1])]
                    for k, v in (mc.get('priors') or {}).items()})
 
@@ -1047,17 +931,9 @@ def main(argv=None):
     start = np.array([float(det_cfg.get('bias', np.median(x))),
                       float(det_cfg.get('ron', 7.0)),
                       float(det_cfg.get('gain', 70.0)),
-                      np.log(float(mc.get('mu_start', 0.02))),
-                      float(det_cfg.get('alpha', 0.0)),
-                      float(det_cfg.get('beta_r', 2.0))])
-    # Nelder-Mead builds its initial simplex by scaling each coordinate, so a
-    # coordinate that starts at exactly zero never moves. alpha's natural
-    # starting value IS zero, so nudge it off.
-    if start[4] == 0.0:
-        start[4] = -1e-3
+                      np.log(float(mc.get('mu_start', 0.02)))])
     log('starting from the configuration\'s own detector values: '
-        f'bias={start[0]:g}, ron={start[1]:g}, gain={start[2]:g} ADU/e-, '
-        f'alpha={start[4]:g} /e-')
+        f'bias={start[0]:g}, ron={start[1]:g}, gain={start[2]:g} ADU/e-')
     start = max_likelihood(post, start)
 
     chain = run_mcmc(post,
@@ -1072,37 +948,16 @@ def main(argv=None):
     expect, pull, chi2_dof, dof = goodness_of_fit(x, counts, theta_med, du)
     log(f'chi2/dof = {chi2_dof:.2f} over {dof} degrees of freedom', 'value')
     if chi2_dof > 2:
-        log(f'chi2/dof = {chi2_dof:.1f}: {len(PARAM_NAMES)} parameters do not '
+        log(f'chi2/dof = {chi2_dof:.1f}: a four-parameter detector does not '
             f'describe {int(counts.sum())} pixel values to their Poisson '
             f'precision. Quote the inflated errors below, not the formal ones', 'warn')
 
     summary = summarise(chain, chi2_dof)
     for name, unit in (('bias', 'ADU'), ('ron', 'ADU'),
-                       ('gain', 'ADU/e-'), ('mu', 'e-/frame'),
-                       ('alpha', '1/e-'), ('beta_r', '(2 = Gaussian)')):
+                       ('gain', 'ADU/e-'), ('mu', 'e-/frame')):
         med, m, p, mi, pi = summary[name]
         log(f'{name:>5s} = {med:.5f} -{mi:.5f} +{pi:.5f} {unit}   '
             f'(formal -{m:.5f} +{p:.5f})', 'value')
-
-    # The non-linearity is only a correction while the map stays monotonic. If
-    # its turning point sits anywhere near the brightest pixel actually fitted,
-    # the quadratic is being asked to do structural work, not a small
-    # correction, and the fitted gain is not a gain any more.
-    limit = nonlinear_limit(summary['alpha'][0])
-    reach = (x[-1] - summary['bias'][0]) / summary['gain'][0]
-    if np.isfinite(limit):
-        log(f'the non-linearity turns over at {limit:.2f} e-, and the fitted '
-            f'range reaches {reach:.2f} e-', 'value')
-        if limit < 2.0 * reach:
-            log(f'that turning point is uncomfortably close to the data. A '
-                f'quadratic is a good description of a SMALL non-linearity; '
-                f'this one is not small, so treat alpha as an empirical '
-                f'correction and the gain as degenerate with it', 'warn')
-
-    # alpha and gain trade against each other: both stretch the ADU axis, and
-    # only the curvature of the tail tells them apart. Say how badly.
-    rho = float(np.corrcoef(chain[:, 2], chain[:, 4])[0, 1])
-    log(f'gain-alpha correlation in the posterior: {rho:+.4f}', 'value')
 
     # --- outputs --------------------------------------------------------
     out_cfg = cfg.get('output', {})

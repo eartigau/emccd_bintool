@@ -127,15 +127,12 @@ def esc(text):
 def _param_table(summary, chi2_dof):
     """The four fitted numbers, with both versions of their error bar."""
     unit = {'bias': r'\si{ADU}', 'ron': r'\si{ADU}',
-            'gain': r'ADU\,/\,e$^-$', 'mu': r'e$^-$/frame',
-            'alpha': r'1\,/\,e$^-$', 'beta_r': r'(2 = Gaussian)'}
+            'gain': r'ADU\,/\,e$^-$', 'mu': r'e$^-$/frame'}
     shown = {'bias': r'bias, $B$', 'ron': r'read noise, $\sigma_{\mathrm{RON}}$',
-             'gain': r'EM gain, $G$', 'mu': r'flux per pixel, $\mu$',
-             'alpha': r'non-linearity, $\alpha$',
-             'beta_r': r'read-noise shape, $\beta_R$'}
-    digits = {'bias': 4, 'ron': 4, 'gain': 4, 'mu': 6, 'alpha': 5, 'beta_r': 4}
+             'gain': r'EM gain, $G$', 'mu': r'flux per pixel, $\mu$'}
+    digits = {'bias': 4, 'ron': 4, 'gain': 4, 'mu': 6}
     rows = []
-    for name in ('bias', 'ron', 'gain', 'mu', 'alpha', 'beta_r'):
+    for name in ('bias', 'ron', 'gain', 'mu'):
         med, m, p, mi, pi = summary[name]
         d = digits[name]
         rows.append(
@@ -234,15 +231,13 @@ def build_tex(meta, summary, design, spread, chi2_dof, figures, figdir):
     doc.append(r"""
 \begin{keybox}
 \sffamily\small
-{\color{accent}\bfseries The five numbers}\\[0.35em]
+{\color{accent}\bfseries The four numbers}\\[0.35em]
 \begin{tabular}{@{}p{0.235\linewidth}p{0.235\linewidth}p{0.235\linewidth}p{0.235\linewidth}@{}}
 $B = """ + f'{med["bias"]:.4f}' + r"""$~ADU &
 $\sigma_{\mathrm{RON}} = """ + f'{med["ron"]:.4f}' + r"""$~ADU &
 $G = """ + f'{med["gain"]:.3f}' + r"""$~ADU/e$^-$ &
 $\mu = """ + f'{med["mu"]:.5f}' + r"""$~e$^-$/frame
-\end{tabular}\\[0.3em]
-non-linearity $\alpha = """ + f'{med["alpha"]:+.5f}' + r"""$~e$^{-1}$,
-i.e.\ $n_{\mathrm{ideal}} = n + \alpha n^2$
+\end{tabular}
 
 \vspace{0.7em}
 {\color{accent}\bfseries The bins}\\[0.35em]
@@ -273,21 +268,7 @@ P(u) = e^{-\mu}\,\delta(u)
         'convolved with a Gaussian of width $\\sigma_{\\mathrm{RON}}$ and '
         'integrated over each 1~ADU digitisation step. The Poisson sum over '
         'electron number is done in closed form, so there is no \\texttt{nmax} '
-        'truncation anywhere in this fit.\n\n'
-        'The detector is not assumed to be linear. What the EMCCD law above '
-        r'describes is the IDEAL charge $n_{\mathrm{ideal}}$; what the '
-        'electronics report is $n$, and the two are related by\n'
-        r"""
-\begin{equation*}
-n_{\mathrm{ideal}} = n + \alpha n^2 ,
-\end{equation*}
-"""
-        'applied to the amplified charge before the read noise, since that is '
-        'where the non-linearity of the output stage sits. It is a change of '
-        r'variables, so the density picks up the Jacobian $1 + 2\alpha n$; the '
-        'zero-electron peak is untouched, which is why the bias and the read '
-        r'noise stay as well determined as they were. $\alpha = 0$ recovers '
-        'the strictly linear detector.\n')
+        'truncation anywhere in this fit.\n')
 
     doc.append(r"""
 \begin{center}

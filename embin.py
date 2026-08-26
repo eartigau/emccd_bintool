@@ -381,19 +381,6 @@ def make_model_config(cfg, edges):
     "everything above" bin -- which is exactly how build_histogram_cube fills it.
     """
     det = cfg['detector']
-    # The per-pixel flux fitter in emccd_histo.py knows nothing about the
-    # non-linearity or the read-noise shape: it assumes a linear detector with
-    # Gaussian read noise. That matters because embin_mcmc.py fits `gain`
-    # TOGETHER with `alpha`, and the two are ~94 % anti-correlated -- pasting
-    # its gain into the configuration while leaving alpha unused gives a gain
-    # that is wrong by the full size of that degeneracy, which is worse than
-    # the linear calibration it replaced.
-    if float(det.get('alpha', 0.0)) != 0.0 or float(det.get('beta_r', 2.0)) != 2.0:
-        log(f'detector.alpha = {det.get("alpha", 0.0)} and detector.beta_r = '
-            f'{det.get("beta_r", 2.0)} are set, but the flux fitter cannot use '
-            f'them: it assumes a linear detector with Gaussian read noise. If '
-            f'`gain` came from a fit with alpha free, it is NOT valid here - '
-            f're-fit with alpha held at 0, or accept a biased flux scale', 'warn')
     return {
         'detector': {
             'gain': float(det['gain']),
