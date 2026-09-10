@@ -51,7 +51,7 @@ input:
   #     FITS file
   # on a frame that looks perfectly fine in the file listing. To check a folder
   # on macOS:  find <folder> -name '*.fits' -flags +dataless | wc -l   -> want 0
-  directory: "/Users/eartigau/fits_archive/GitHubProjects/emccd_bintool/data_pesto"
+  directory: "/Users/eartigau/galina/data/"
 
   # Which files in that folder are frames. "*.fits" means every .fits file.
   pattern: "*.fits"
@@ -121,7 +121,7 @@ input:
 # your data. Re-run bin_optimizer.py with your own constants and paste the new
 # list here. That is the whole point of the tool.
 histogram:
-  edges:  [0, 320, 331, 404, 492, 601, 740, 949, 950]
+  edges: [0, 1994, 2139, 2341, 2621, 2979, 3413, 3926, 3927]
 
   # For comparison only, do not use: 16 evenly spaced bins over the same range
   # retain a small fraction of the information, because they waste almost every
@@ -145,26 +145,12 @@ histogram:
 # An independent fit to an automatically segmented sky mask agrees to well
 # within a percent.
 detector:
-  bias: 303.6178      # ADU      -- electronics pedestal: what a pixel reads
-                      #             when it saw nothing at all
-  ron: 6.8164         # ADU      -- read-out noise, 1 sigma: the width of the
-                      #             peak around the bias
-  gain: 71.0598       # ADU/e-   -- mean EM gain: how many ADU one photo-electron
-                      #             turns into ON AVERAGE (the EM register is
-                      #             stochastic, so a single electron can read out
-                      #             anywhere from a few ADU to several hundred)
-  full_well: 5000     # ADU      -- saturation: the largest value a pixel can
-                      #             report. Sets the extent of the internal model
-                      #             grid and the top of the reference histogram.
-  nmax: 40            # electrons carried in the Poisson sum. Must be comfortably
-                      # above the brightest flux you expect; a bright star core
-                      # in the PESTO data reaches about 3 e-/frame, so 40 is ample.
-                      # Raising it costs computing time, lowering it below your
-                      # actual fluxes silently biases the fit.
-  cic: 0.0            # clock-induced charge [e-/frame]. Spurious electrons the
-                      # EM register creates by itself. The pesto_stats calibration
-                      # does not separate it from the sky flux, so it is left at 0
-                      # and whatever CIC exists is reported as part of the sky.
+  bias: 1967.1641
+  ron: 6.8654
+  gain: 143.4211
+  full_well: 5000
+  nmax: 40
+  cic: 0.0
 
 # -----------------------------------------------------------------------
 # 4. FLUX FIT -- turning each pixel's histogram into a flux
@@ -320,7 +306,7 @@ chunks:
 #   from embin import flux_maps_from_cube
 #   flux, flux_err, mu_lo, mu_hi = flux_maps_from_cube('data_bin/embin_chunk00.fits.gz')
 output:
-  directory: "data_bin"            # the output folder
+  directory: "/Users/eartigau/galina/binneddata/" # the output folder
   compress: true                   # gzip every file written here. The '.gz' is
                                    # appended to the names below rather than
                                    # spelled out in them, so you get
