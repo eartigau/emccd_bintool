@@ -667,9 +667,9 @@ def flux_sigma_map(cfg, files, design, summary, hdu_index):
     events, their likelihood is monotonic, and the estimator pins them to the
     bottom of the flux grid. The median fitted flux then lands a factor of three
     under the truth and the page says nothing about the estimator, only about
-    small-number statistics. Feed it the whole sequence (`mcmc.flux_map_frames:
-    null`) and each pixel gets of order twenty events, which is the regime the
-    plot is worth reading in.
+    small-number statistics. Feed it a thousand frames (the default
+    `mcmc.flux_map_max_frames`) and each pixel gets of order twenty events,
+    which is the regime the plot is worth reading in; more only costs time.
     """
     # As an array, not the plain list edge_list() hands back: emccd_histo's
     # grid builder compares the edges to a threshold element-wise.
@@ -924,8 +924,9 @@ def main(argv=None):
                     help='skip the whole-frame per-pixel fit, and with it the '
                          'flux-against-uncertainty page of the report')
     ap.add_argument('--map-frames', type=int, default=None,
-                    help='override mcmc.flux_map_frames: how many frames the '
-                         'per-pixel fit on page 3 uses (default: all of them)')
+                    help='override mcmc.flux_map_max_frames: at most how many '
+                         'frames the per-pixel fit on page 3 uses (default: '
+                         'the first 1000)')
     ap.add_argument('--no-plots', action='store_true',
                     help='numbers only, no PDF written')
     args = ap.parse_args(argv)
@@ -1054,8 +1055,12 @@ def main(argv=None):
         if not args.no_flux_map:
             # Its own frame count, deliberately: see flux_sigma_map's docstring
             # for why the per-pixel fit needs far more frames than the pooled
-            # one does. null (the default) means the whole sequence.
-            n_map = args.map_frames or mc.get('flux_map_frames', None)
+            # one does. The first 1000 by default; null means every frame.
+            if 'flux_map_frames' in mc:
+                log('mcmc.flux_map_frames is ignored: it is now '
+                    'mcmc.flux_map_max_frames (default 1000, null for every '
+                    'frame)', 'warn')
+            n_map = args.map_frames or mc.get('flux_map_max_frames', 1000)
             n_map = None if n_map in (None, 0, 'all') else int(n_map)
             map_files = (files if n_map == len(files)
                          else frame_list(cfg, n_map))

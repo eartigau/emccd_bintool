@@ -399,16 +399,19 @@ mcmc:
   # stay well below the 1.0e-3 Poisson precision of the data.
   grid_step: 0.25
 
-  # How many frames page 3 of the report -- per-pixel uncertainty against
-  # per-pixel flux -- fits each pixel from. This is NOT `n_frames` above, and it
-  # should be much larger. The pooled histogram has 2.8e7 values whatever
-  # `n_frames` is; a per-pixel fit has only this many values PER PIXEL, and at a
-  # sky flux of 0.017 e-/frame, 64 frames means about one electron per pixel for
-  # the whole sequence. A third of the pixels then see nothing at all, their
-  # likelihood never turns over, and the fit pins them to the bottom of the flux
-  # grid -- the plot ends up measuring small-number statistics rather than the
-  # estimator. null -> every frame in the folder, which is the right answer.
-  flux_map_frames: null
+  # At most how many frames page 3 of the report -- per-pixel uncertainty
+  # against per-pixel flux -- fits each pixel from: the first this-many frames
+  # of the folder, or all of them if it holds fewer. This is NOT `n_frames`
+  # above, and it should be much larger. The pooled histogram has 2.8e7 values
+  # whatever `n_frames` is; a per-pixel fit has only this many values PER PIXEL,
+  # and at a sky flux of 0.017 e-/frame, 64 frames means about one electron per
+  # pixel for the whole sequence. A third of the pixels then see nothing at all,
+  # their likelihood never turns over, and the fit pins them to the bottom of
+  # the flux grid -- the plot ends up measuring small-number statistics rather
+  # than the estimator. 1000 frames gives a sky pixel about twenty electrons,
+  # which is plenty, and keeps a 100,000-frame night from binning every frame
+  # just to draw one page. null -> every frame in the folder, however many.
+  flux_map_max_frames: 1000
 
   mu_start: 0.02        # first guess at the flux [e-/frame]; only the seed of
                         # the maximum-likelihood search that seeds the walkers.
