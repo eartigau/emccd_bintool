@@ -295,13 +295,14 @@ def pooled_histogram(files, hdu_index, clip_sigma):
         total = img.astype(np.float64) if total is None else total + img
     mean_img = total / len(files)
 
+    finite_mean = np.isfinite(mean_img)
     if clip_sigma is None:
-        keep = np.ones(mean_img.shape, dtype=bool)
+        keep = finite_mean
         log('no bright-pixel clipping, every pixel is fitted', 'warn')
     else:
-        med = np.median(mean_img)
-        sig = np.median(np.abs(mean_img - med)) * 1.4826
-        keep = np.abs(mean_img - med) < clip_sigma * sig
+        med = np.median(mean_img[finite_mean])
+        sig = np.median(np.abs(mean_img[finite_mean] - med)) * 1.4826
+        keep = finite_mean & (np.abs(mean_img - med) < clip_sigma * sig)
         log(f'per-pixel mean: median {med:.4f} ADU, robust sigma {sig:.4f} ADU', 'value')
         log(f'keeping {keep.sum()} of {keep.size} pixels '
             f'({100.0 * keep.mean():.2f} %) within {clip_sigma:g} sigma; '
@@ -335,14 +336,40 @@ def fit_range(hist, adu_min, adu_max):
     return x, n
 
 
+def first_frame_start(image):
+    """Bias and read noise read off one raw frame, to start the fit from.
+
+    Where the search starts decides where it ends. Seeded from a `detector:`
+    block left over from another camera, the maximum-likelihood search settles
+    into a wrong solution far from the real peak (on the 260821 sequence,
+    started from the PESTO values, it stopped at a bias of 310 ADU against a
+    true 1967), and the walkers launched around it never get back. One raw
+    frame is enough to start next to the answer, because at a sky of a few
+    hundredths of an electron per frame nearly every pixel reads out nothing
+    but bias and read noise:
+
+      bias  the median pixel value, which sits on that peak;
+      ron   half the 15.9-84.1 percentile range, the peak's 1-sigma width.
+
+    Percentiles rather than a standard deviation, so the few per cent of pixels
+    carrying an electron or a star barely move it. On the first frame of the
+    260821 sequence this gives 7.0 ADU against a fitted 6.87 (1.4826 x MAD
+    gives 7.41).
+    """
+    vals = image[np.isfinite(image)]
+    p16, p84 = np.percentile(vals, [15.865, 84.135])
+    return float(np.median(vals)), 0.5 * float(p84 - p16)
+
+
 # ---------------------------------------------------------------------------
 # Posterior
 # ---------------------------------------------------------------------------
 class Posterior:
     """The multinomial log-posterior, as a picklable callable.
 
-    theta = (bias, ron, gain, ln_mu). Flat priors on the first three within
-    their configured ranges, flat in ln_mu -- i.e. log-uniform on the flux,
+    theta = (bias, ron, gain, ln_mu). Flat priors on the first three (the bias
+    within 10 % of the first frame's median, the other two within their
+    configured ranges), flat in ln_mu -- i.e. log-uniform on the flux,
     which is the scale-invariant choice for a positive quantity whose order of
     magnitude is not known in advance.
     """
@@ -378,8 +405,8 @@ def max_likelihood(post, start):
     """Nelder-Mead maximum of the posterior, used to seed the walkers.
 
     Starting the chain in a ball around the maximum rather than around the
-    configuration's guessed values is what keeps the burn-in to a few hundred
-    steps instead of a few thousand.
+    first-frame guesses is what keeps the burn-in to a few hundred steps
+    instead of a few thousand.
     """
     res = minimize(lambda t: -post(t), start, method='Nelder-Mead',
                    options={'xatol': 1e-7, 'fatol': 1e-2,
@@ -654,7 +681,7 @@ def flux_sigma_map(cfg, files, design, summary, hdu_index):
     # embin's fitter reads the detector out of a config dict; hand it the one we
     # just measured rather than whatever the YAML still says.
     fit_cfg = dict(cfg)
-    fit_cfg['detector'] = dict(cfg.get('detector', {}))
+    fit_cfg['detector'] = dict(cfg.get('detector') or {})
     fit_cfg['detector'].update(bias=float(summary['bias'][0]),
                                ron=float(summary['ron'][0]),
                                gain=float(summary['gain'][0]),
@@ -804,7 +831,7 @@ def propose_bins(summary, cfg, bin_cfg, chain, n_draws):
     which are floating. It costs about two seconds per draw, so it is the one
     part of this script worth switching off when iterating.
     """
-    det_cfg = cfg.get('detector', {})
+    det_cfg = cfg.get('detector') or {}
     saturation = float(det_cfg.get('full_well', 5000))
     nbins = int(bin_cfg.get('nbins', 8))
     mu_min = float(bin_cfg.get('mu_min', 1.0e-3))
@@ -842,7 +869,7 @@ def propose_bins(summary, cfg, bin_cfg, chain, n_draws):
 
 def yaml_block(summary, design, chi2_dof, cfg):
     """The two configuration blocks to paste back into embin_config.yaml."""
-    det_cfg = cfg.get('detector', {})
+    det_cfg = cfg.get('detector') or {}
     infl = np.sqrt(max(chi2_dof, 1.0))
     lines = ['',
              '# ---- paste into embin_config.yaml '
@@ -915,25 +942,41 @@ def main(argv=None):
     clip = None if clip is None else float(clip)
     du = float(mc.get('grid_step', 0.25))
 
-    priors = {'bias': [250.0, 400.0], 'ron': [0.5, 40.0],
-              'gain': [5.0, 500.0], 'mu': [1.0e-6, 10.0]}
+    # No bias entry: the bias prior follows the camera, from the first frame.
+    priors = {'ron': [0.5, 40.0], 'gain': [5.0, 500.0], 'mu': [1.0e-6, 10.0]}
+    cfg_priors = dict(mc.get('priors') or {})
+    if cfg_priors.pop('bias', None) is not None:
+        log('mcmc.priors.bias is ignored: the bias prior is the first '
+            'frame\'s median +-10 %', 'warn')
     priors.update({k: [float(v[0]), float(v[1])]
-                   for k, v in (mc.get('priors') or {}).items()})
+                   for k, v in cfg_priors.items()})
 
     # --- data -----------------------------------------------------------
     files = frame_list(cfg, n_frames)
     hist, keep, _ = pooled_histogram(files, hdu_index, clip)
     x, counts = fit_range(hist, mc.get('adu_min'), mc.get('adu_max'))
 
+    # --- starting point -------------------------------------------------
+    # Bias and RON come from the first frame, not from the `detector:` block,
+    # and so does the bias prior: +-10 % around the median. A configuration
+    # left over from another camera cannot then send the walkers astray.
+    bias_start, ron_start = first_frame_start(_read(files[0], hdu_index))
+    half = 0.1 * abs(bias_start)
+    priors['bias'] = [bias_start - half, bias_start + half]
+    log(f'first frame: median {bias_start:g} ADU, half 16-84 percentile range '
+        f'{ron_start:g} ADU; bias prior [{priors["bias"][0]:g}, '
+        f'{priors["bias"][1]:g}] ADU', 'value')
+
     # --- posterior ------------------------------------------------------
     post = Posterior(x, counts, priors, du)
-    det_cfg = cfg.get('detector', {})
-    start = np.array([float(det_cfg.get('bias', np.median(x))),
-                      float(det_cfg.get('ron', 7.0)),
+    det_cfg = cfg.get('detector') or {}
+    start = np.array([bias_start,
+                      ron_start,
                       float(det_cfg.get('gain', 70.0)),
                       np.log(float(mc.get('mu_start', 0.02)))])
-    log('starting from the configuration\'s own detector values: '
-        f'bias={start[0]:g}, ron={start[1]:g}, gain={start[2]:g} ADU/e-')
+    log('starting from the first frame for bias and RON, the configuration '
+        f'for the gain: bias={start[0]:g}, ron={start[1]:g}, '
+        f'gain={start[2]:g} ADU/e-')
     start = max_likelihood(post, start)
 
     chain = run_mcmc(post,
@@ -978,7 +1021,7 @@ def main(argv=None):
 
     # Everything the report needs to say what this run was, gathered in one
     # place so the template only ever reads from a dictionary.
-    det_cfg = cfg.get('detector', {})
+    det_cfg = cfg.get('detector') or {}
     meta = {
         'dataset': os.path.basename(_resolve(cfg, cfg['input']['directory'])),
         'directory': _resolve(cfg, cfg['input']['directory']),

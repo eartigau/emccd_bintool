@@ -411,7 +411,10 @@ mcmc:
   flux_map_frames: null
 
   mu_start: 0.02        # first guess at the flux [e-/frame]; only the seed of
-                        # the maximum-likelihood search that seeds the walkers
+                        # the maximum-likelihood search that seeds the walkers.
+                        # Bias and RON are seeded from the first frame (its
+                        # median, and half its 16-84 percentile range), the
+                        # gain from `detector: gain` above.
   walkers: 32           # emcee ensemble size
   steps: 3000           # steps per walker. About 90 s at grid_step 0.25.
   burn: 600             # steps discarded from the head of each chain
@@ -420,9 +423,10 @@ mcmc:
 
   # Prior ranges: flat between the two bounds, except `mu`, which is flat in
   # log(mu). These are deliberately wide -- they are there to keep the walkers
-  # out of unphysical territory, not to express an opinion.
+  # out of unphysical territory, not to express an opinion. There is no `bias`
+  # entry: its prior is the first frame's median +-10 %, so it follows the
+  # camera without being edited for it.
   priors:
-    bias: [250.0, 400.0]      # ADU
     ron: [0.5, 40.0]          # ADU
     gain: [5.0, 500.0]        # ADU/e-
     mu: [1.0e-6, 10.0]        # e-/frame, log-uniform
