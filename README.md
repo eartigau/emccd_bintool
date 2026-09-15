@@ -178,8 +178,8 @@ want it elsewhere).
 
 | File | What it is |
 |---|---|
-| `embin_chunk00.fits.gz` ... | one cube file per chunk of frames, described below |
-| `embin_chunk00_flux.fits.gz` ... | the mean flux and its error for that chunk, in two extensions |
+| `embin_chunk000001.fits.gz` ... | one cube file per chunk of frames, described below |
+| `embin_chunk000001_flux.fits.gz` ... | the mean flux and its error for that chunk, in two extensions |
 | `chunk_summary.fits.gz` | all the chunks stitched together, plus the light curves |
 | `chunk_lightcurves.csv` | the photometry: one row per chunk, `flux_starK` and `eflux_starK` for every star, with the dates, the sky and the frame keywords |
 | `chunk_stars.csv` | one row per star: RA, Dec, position, how many chunks measured it, whether it varies |
@@ -192,7 +192,7 @@ want it elsewhere).
 Each chunk comes as two files, and the split is deliberate: the histogram cube
 is the measurement, the flux map is one reduction of it.
 
-`embin_chunkNN.fits.gz` is the **cube file**, the one to archive. Everything is
+`embin_chunkNNNNNN.fits.gz` is the **cube file**, the one to archive. Everything is
 written gzipped: astropy compresses and decompresses on the file name alone, so
 nothing you do with these files changes, and `gunzip` gives an ordinary FITS.
 It pays here, because a histogram cube is small counts and empty sky: 7.0 MB of
@@ -200,7 +200,7 @@ data becomes 0.75 MB on disk. Set `output.compress: false` for plain `.fits`.
 Open one with
 
 ```bash
-python -c "from astropy.io import fits; fits.open('data_bin/embin_chunk00.fits.gz').info()"
+python -c "from astropy.io import fits; fits.open('data_bin/embin_chunk000001.fits.gz').info()"
 ```
 
 and you will see:
@@ -212,7 +212,7 @@ and you will see:
 | `HEADERS` | table | one row per input frame, one column per FITS keyword, so the timestamps survive |
 | `STAMP01`, `STAMP02`, ... | (64, 16, 16) | the raw, unbinned ADU values of every frame in a small box around each detected star |
 
-Nothing fitted is in there. `embin_chunkNN_flux.fits` is the **flux file**:
+Nothing fitted is in there. `embin_chunkNNNNNN_flux.fits` is the **flux file**:
 
 | Extension | Shape | Contents |
 |---|---|---|
@@ -225,12 +225,12 @@ flux file is never the only copy of anything. Delete one and rebuild it from the
 cube alone, with no frames and no configuration file:
 
 ```bash
-python embin.py --from-cube data_bin/embin_chunk00.fits.gz
+python embin.py --from-cube data_bin/embin_chunk000001.fits.gz
 ```
 
 ```python
 from embin import flux_maps_from_cube
-flux, flux_err, mu_lo, mu_hi = flux_maps_from_cube('data_bin/embin_chunk00.fits.gz')
+flux, flux_err, mu_lo, mu_hi = flux_maps_from_cube('data_bin/embin_chunk000001.fits.gz')
 ```
 
 That reader is also how anything else should get a mean out of these files: the
@@ -347,8 +347,8 @@ and there is no astrometric solution to be had at all. So `embin.py` and
 the other. If the astrometry fails, the binning products are still complete.
 
 The astrometry writes its solution into **every** product, not just the summary:
-each `embin_chunkNN.fits.gz` gets the WCS in its primary header and in
-`HISTCUBE`, and each `embin_chunkNN_flux.fits.gz` in its primary header and in
+each `embin_chunkNNNNNN.fits.gz` gets the WCS in its primary header and in
+`HISTCUBE`, and each `embin_chunkNNNNNN_flux.fits.gz` in its primary header and in
 `FLUX` and `FLUX_ERR`, so the cube and the maps fitted from it look at the
 same sky. Every chunk keeps the same CD matrix and the same
 central `CRPIX`; only `CRVAL` moves, by that chunk's measured drift, because

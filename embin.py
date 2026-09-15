@@ -279,7 +279,7 @@ def flux_path_for(cube_path):
 
     One rule, used by embin.py, by run_chunks.py and by cube_to_flux_file(), so
     a cube and its fit are always one predictable rename apart -- the output
-    folder holds embin_chunk07.fits.gz next to embin_chunk07_flux.fits.gz, and
+    folder holds embin_chunk000008.fits.gz next to embin_chunk000008_flux.fits.gz, and
     no index of which goes with which is needed. A gzipped cube gets a gzipped
     flux file: the suffix is put back after '_flux', never left dangling on the
     end as a plain splitext would leave it.

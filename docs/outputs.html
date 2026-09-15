@@ -78,11 +78,11 @@
             <table class="data">
               <tr><th>File</th><th>What it is</th></tr>
               <tr>
-                <td class="mono">embin_chunk00.fits.gz<br />embin_chunk01.fits.gz<br />&hellip;</td>
+                <td class="mono">embin_chunk000001.fits.gz<br />embin_chunk000002.fits.gz<br />&hellip;</td>
                 <td>One cube file per chunk of frames: the histograms, the star stamps, the frame headers. This is the data, and the only thing worth archiving. Described below.</td>
               </tr>
               <tr>
-                <td class="mono">embin_chunk00_flux.fits.gz<br />embin_chunk01_flux.fits.gz<br />&hellip;</td>
+                <td class="mono">embin_chunk000001_flux.fits.gz<br />embin_chunk000002_flux.fits.gz<br />&hellip;</td>
                 <td>The mean flux of that chunk and its error, in two extensions. A fit to the cube beside it, and rebuildable from that cube at any time, so losing one costs nothing but the re-fit.</td>
               </tr>
               <tr>
@@ -119,14 +119,14 @@
 
         <!-- ─────────────────── one chunk file ───────────────────────── -->
         <section class="card span-2">
-          <h2>Inside one <code>embin_chunkNN.fits.gz</code></h2>
+          <h2>Inside one <code>embin_chunkNNNNNN.fits.gz</code></h2>
           <p>
             Every chunk comes as two files. This one, the <strong>cube file</strong>, holds
             the measurement and nothing derived from it; the mean flux fitted from it lives
-            beside it in <code class="mono">embin_chunkNN_flux.fits</code>, described below.
+            beside it in <code class="mono">embin_chunkNNNNNN_flux.fits</code>, described below.
             A FITS file can hold several data blocks, called extensions. List them with:
           </p>
-          <div class="codeblock">python -c "from astropy.io import fits; fits.open('data_bin/embin_chunk00.fits.gz').info()"</div>
+          <div class="codeblock">python -c "from astropy.io import fits; fits.open('data_bin/embin_chunk000001.fits.gz').info()"</div>
           <div class="table-wrap">
             <table class="data">
               <tr><th>Extension</th><th>Shape</th><th>Contents</th></tr>
@@ -162,7 +162,7 @@
         </section>
 
         <section class="card">
-          <h2>Inside one <code>embin_chunkNN_flux.fits.gz</code></h2>
+          <h2>Inside one <code>embin_chunkNNNNNN_flux.fits.gz</code></h2>
           <p>
             The <strong>flux file</strong>: the answer, in two extensions.
           </p>
@@ -193,8 +193,8 @@
           <div class="codeblock">from astropy.io import fits
 import matplotlib.pyplot as plt
 
-f = fits.getdata('data_bin/embin_chunk00_flux.fits.gz', 'FLUX')
-e = fits.getdata('data_bin/embin_chunk00_flux.fits.gz', 'FLUX_ERR')
+f = fits.getdata('data_bin/embin_chunk000001_flux.fits.gz', 'FLUX')
+e = fits.getdata('data_bin/embin_chunk000001_flux.fits.gz', 'FLUX_ERR')
 
 print(f.shape)          # (426, 1024)
 print(f[300, 700])      # flux of one pixel, e-/frame
@@ -208,9 +208,9 @@ plt.show()</div>
           </p>
           <div class="codeblock">from embin import flux_maps_from_cube
 
-flux, flux_err, mu_lo, mu_hi = flux_maps_from_cube('data_bin/embin_chunk00.fits.gz')</div>
+flux, flux_err, mu_lo, mu_hi = flux_maps_from_cube('data_bin/embin_chunk000001.fits.gz')</div>
           <p class="hint">
-            From the shell, <code>python embin.py --from-cube data_bin/embin_chunk00.fits.gz</code>
+            From the shell, <code>python embin.py --from-cube data_bin/embin_chunk000001.fits.gz</code>
             writes the flux file for a cube that has none, or replaces one you deleted. You
             can also open either file in DS9 and step through the extensions there; the
             <code>HISTCUBE</code> extension will show as a 16-plane cube.

@@ -67,8 +67,8 @@ WHAT IT WRITES
     data_bin/chunk_summary.fits      WCS in the primary header; RA/Dec columns
                                      added to TRACKS; per-chunk field centre and
                                      measured drift added to CHUNKS
-    data_bin/embin_chunkNN.fits      WCS in the primary header and in HISTCUBE
-    data_bin/embin_chunkNN_flux.fits WCS in the primary header and in FLUX /
+    data_bin/embin_chunkNNNNNN.fits      WCS in the primary header and in HISTCUBE
+    data_bin/embin_chunkNNNNNN_flux.fits WCS in the primary header and in FLUX /
                                      FLUX_ERR: the cube and the maps fitted from
                                      it are the same sky, so both are solved
     data_bin/gaia_field.fits         the Gaia cone search, cached
@@ -967,7 +967,12 @@ def write_wcs_into(path, header, label=''):
                     hdr[k] = (0.0, 'No coupling between sky and bin axes')
             hdr['ASTROMSR'] = ('pesto_astrometry.py', 'WCS added after binning')
         if zipped:
-            tmp = path + '.tmp'
+            # The temporary name has to end in .gz as well: astropy compresses
+            # on the file name alone, so writing to '<name>.fits.gz.tmp' and
+            # moving that onto '<name>.fits.gz' leaves a plain FITS behind a
+            # gzipped name, eleven times the size and a lie to anything that
+            # gunzips it.
+            tmp = path + '.tmp.gz'
             hdul.writeto(tmp, overwrite=True)
             os.replace(tmp, path)
         else:
@@ -1091,7 +1096,7 @@ def main(argv=None):
     ap.add_argument('--no-write', action='store_true',
                     help='solve and report, but do not touch any file')
     ap.add_argument('--no-chunks', action='store_true',
-                    help='update only the summary, not each embin_chunkNN.fits')
+                    help='update only the summary, not each embin_chunkNNNNNN.fits')
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)

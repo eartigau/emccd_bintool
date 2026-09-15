@@ -20,11 +20,11 @@ This script therefore cuts the sequence into contiguous CHUNKS of
 then stitches the chunk results into one time-resolved product. Everything lands
 in the folder named by `output.directory` in the YAML (`data_bin` by default):
 
-  * embin_chunk00.fits, embin_chunk01.fits, ... -- one CUBE file per chunk:
-    the histogram cube, the header table and the raw star stamps, and nothing
-    fitted;
-  * embin_chunk00_flux.fits, ... -- one FLUX file per chunk: that chunk's mean
-    flux map and its error, in two extensions. These are fits to the cube
+  * embin_chunk000001.fits, embin_chunk000002.fits, ... -- one CUBE file per
+    chunk: the histogram cube, the header table and the raw star stamps, and
+    nothing fitted;
+  * embin_chunk000001_flux.fits, ... -- one FLUX file per chunk: that chunk's
+    mean flux map and its error, in two extensions. These are fits to the cube
     beside them, so they need not be archived: embin.flux_maps_from_cube()
     rebuilds them from the cube file alone;
   * chunk_summary.fits -- the flux maps of every chunk as one (n_chunk, ny, nx)
@@ -954,7 +954,13 @@ def main(argv=None):
                 stamps = extract_stamps(sub, sources, hdu_index)
         per_chunk_sources.append(sources)
 
-        out = gz_path(os.path.join(outdir, f'{prefix}{c:02d}.fits'), compress)
+        # Six digits, counting from one: zero-filled so that `ls` and any
+        # other plain sort put the chunks in run order (two digits put
+        # chunk 160 next to chunk 16), and wide enough for a night that
+        # never ends. The `chunk` column of the tables stays 0-based, so
+        # the file numbered N holds chunk N - 1.
+        out = gz_path(os.path.join(outdir, f'{prefix}{c + 1:06d}.fits'),
+                      compress)
         flux_out = flux_path_for(out)
         cfg['input']['first_file'] = first          # so the MEF header records the chunk
         cfg['input']['n_files'] = size

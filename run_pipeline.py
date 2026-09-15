@@ -197,7 +197,7 @@ def main(argv=None):
     ap.add_argument('--no-gaia', action='store_true')
     ap.add_argument('--no-figure', action='store_true')
     ap.add_argument('--no-chunks', action='store_true',
-                    help='update only the summary, not each embin_chunkNN.fits.gz')
+                    help='update only the summary, not each embin_chunkNNNNNN.fits.gz')
     # --- passed through to embin_psf.py ----------------------------------
     ap.add_argument('--stack', default=None,
                     help='the drift-corrected stack the photometry reads')
