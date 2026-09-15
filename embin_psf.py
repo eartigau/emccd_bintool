@@ -92,7 +92,8 @@ from astropy.wcs import WCS
 from scipy.optimize import least_squares
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from embin import _resolve, _timestamp, load_config, log            # noqa: E402
+from embin import (_resolve, _timestamp, find_summary,  # noqa: E402
+                   load_config, log)
 from embin_report import write_psf_report                            # noqa: E402
 
 
@@ -858,8 +859,8 @@ def main(argv=None):
                     help='the drift-corrected stack (default: '
                          'astrometry_stack.fits in the output folder)')
     ap.add_argument('--summary', default=None,
-                    help='the per-chunk cube (default: chunk_summary.fits in '
-                         'the output folder)')
+                    help='the per-chunk summary (default: output.summary '
+                         'from the configuration, with or without .gz)')
     ap.add_argument('--no-plot', action='store_true')
     args = ap.parse_args(argv)
 
@@ -872,7 +873,7 @@ def main(argv=None):
 
     outdir = _resolve(cfg, cfg.get('output', {}).get('directory', 'data_bin'))
     stack_path = args.stack or os.path.join(outdir, 'astrometry_stack.fits')
-    summary_path = args.summary or os.path.join(outdir, 'chunk_summary.fits')
+    summary_path = args.summary or find_summary(cfg, outdir)
     for p in (stack_path, summary_path):
         if not os.path.exists(p):
             log(f'{p} not found. Run run_chunks.py and then '

@@ -74,8 +74,8 @@ from astropy.units import UnitsWarning
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from embin import (_resolve, all_frames, build_flux_grid,  # noqa: E402
                    build_histogram_cube, detect_sources, extract_stamps,
-                   fit_flux_image, flux_path_for, get_edges, gz_path,
-                   load_config, log, write_cube_mef, write_flux_mef)
+                   find_summary, fit_flux_image, flux_path_for, get_edges,
+                   gz_path, load_config, log, write_cube_mef, write_flux_mef)
 
 
 # ---------------------------------------------------------------------------
@@ -877,7 +877,8 @@ def main(argv=None):
     # binning: after pesto_astrometry.py has added sky coordinates, or after a
     # change to what goes in them, that is seconds rather than the whole run.
     if args.csv_only:
-        summary = os.path.join(outdir, summary_name)
+        # Whatever is on disk, gzipped or not: this path only reads.
+        summary = find_summary(cfg, outdir)
         if not os.path.exists(summary):
             log(f'--csv-only needs {summary}, which is not there yet: run '
                 f'without it first', 'error')

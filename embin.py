@@ -192,6 +192,27 @@ def all_frames(cfg):
     return files
 
 
+def find_summary(cfg, outdir=None):
+    """Where run_chunks.py's stitched summary is, gzipped or not.
+
+    `output.summary` names it without the '.gz' that `output.compress` adds, so
+    the configured name and the name on disk part company the moment someone
+    flips `compress` or gunzips a file by hand. Both forms are tried, the
+    configured one first; if neither is there, the configured one comes back so
+    that the caller's error message names the file it expected.
+    """
+    out_cfg = cfg.get('output') or {}
+    if outdir is None:
+        outdir = _resolve(cfg, out_cfg.get('directory', 'data_bin'))
+    name = str(out_cfg.get('summary', 'chunk_summary.fits'))
+    compress = bool(out_cfg.get('compress', True))
+    asked = os.path.join(outdir, gz_path(name, compress))
+    other = os.path.join(outdir, name if compress else gz_path(name, True))
+    if os.path.exists(asked) or not os.path.exists(other):
+        return asked
+    return other
+
+
 def find_files(cfg):
     """The list of input frames, in numeric filename order, cut to the requested chunk."""
     inp = cfg['input']

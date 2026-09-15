@@ -103,7 +103,8 @@ from astropy.table import Table
 from astropy.wcs import WCS
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from embin import _resolve, flux_path_for, load_config, log  # noqa: E402
+from embin import (_resolve, find_summary, flux_path_for,  # noqa: E402
+                   load_config, log)
 from run_chunks import photometry_csv_from_config            # noqa: E402
 
 
@@ -1103,13 +1104,10 @@ def main(argv=None):
     acfg = cfg.get('astrometry', {}) or {}
     out_cfg = cfg.get('output', {})
     outdir = _resolve(cfg, out_cfg.get('directory', 'data_bin'))
-    summary = os.path.join(outdir, out_cfg.get('summary',
-                                               'chunk_summary.fits'))
     # run_chunks.py gzips its products by default, so the name in the config is
-    # the uncompressed one and what is on disk usually ends in .gz. Take
-    # whichever exists, so neither setting has to be kept in step with the other.
-    if not os.path.exists(summary) and os.path.exists(summary + '.gz'):
-        summary += '.gz'
+    # the uncompressed one and what is on disk usually ends in .gz. find_summary
+    # takes whichever is there, so neither setting has to be kept in step.
+    summary = find_summary(cfg, outdir)
     if not os.path.exists(summary):
         log(f'{summary} does not exist: run run_chunks.py first', 'error')
         return 1
