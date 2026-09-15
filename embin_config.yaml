@@ -324,6 +324,13 @@ output:
                                    # same name with _flux before the extension
   chunk_prefix: "embin_chunk"      # run_chunks.py's per-chunk files
   summary: "chunk_summary.fits"    # run_chunks.py's stitched summary file
+  lightcurve_csv: "chunk_lightcurves.csv"  # run_chunks.py's photometry table:
+                                   # one row per chunk, flux_starK and
+                                   # eflux_starK for every star it tracked
+  stars_csv: "chunk_stars.csv"     # one row per star: where it is, how many
+                                   # chunks measured it, whether it varies.
+                                   # Neither of these two is ever gzipped: they
+                                   # are meant to open in a spreadsheet.
   figures: "figures"               # sub-folder of `directory` for the PDF plots
   overwrite: true                  # true -> silently replace an existing file of
                                    # the same name. false -> stop with an error

@@ -104,6 +104,7 @@ from astropy.wcs import WCS
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from embin import _resolve, flux_path_for, load_config, log  # noqa: E402
+from run_chunks import photometry_csv_from_config            # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -1348,6 +1349,11 @@ def main(argv=None):
     log(f'wrote the WCS, and sky coordinates for every track, into {summary}',
         'value')
     hdul.close()
+
+    # The photometry tables are a copy of the summary's own, so they went
+    # stale the moment it gained sky coordinates: write them again, with the
+    # RA and Dec of every star in them this time.
+    photometry_csv_from_config(cfg, summary)
 
     # --- and into every per-chunk binning product --------------------------
     # The binning step knows nothing about the sky and is left that way; this

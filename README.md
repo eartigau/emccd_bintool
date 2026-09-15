@@ -181,6 +181,8 @@ want it elsewhere).
 | `embin_chunk00.fits.gz` ... | one cube file per chunk of frames, described below |
 | `embin_chunk00_flux.fits.gz` ... | the mean flux and its error for that chunk, in two extensions |
 | `chunk_summary.fits.gz` | all the chunks stitched together, plus the light curves |
+| `chunk_lightcurves.csv` | the photometry: one row per chunk, `flux_starK` and `eflux_starK` for every star, with the dates, the sky and the frame keywords |
+| `chunk_stars.csv` | one row per star: RA, Dec, position, how many chunks measured it, whether it varies |
 | `figures/chunk_lightcurves.pdf` | flux of every tracked star versus time |
 | `figures/chunk_drift.pdf` | how far the field moved during the sequence |
 | `figures/chunk_flux_maps.pdf` | the flux map of each chunk, side by side |
@@ -258,6 +260,35 @@ plt.show()
 v = Table(fits.getdata('data_bin/chunk_summary.fits', 'VARSTAT'))
 print(v['track', 'chi2', 'dof', 'chi2_red', 'p_value', 'sigma'])
 ```
+
+The same light curves also come as two tables. `chunk_lightcurves.csv` is the
+photometry, one row per chunk: when the chunk was and which frames it is, then
+`flux_star1`, `eflux_star1`, `flux_star2`, ... for every star tracked, then the
+sky level, the field drift and the keywords of the raw frames (the ones that
+change, such as airmass, hour angle and focus; the ones that do not, such as
+target, filter, exposure and EM gain, are in the header). A star that was not
+detected in a chunk, because it drifted out of the field or fell under the
+detection threshold, is `NaN` in that row, so every row has the same columns.
+`chunk_stars.csv` is one row per star, `star1` first: its RA and Dec, its mean
+position on the detector, how many chunks it was measured in, and the
+variability statistics of its light curve.
+
+Both are ECSV: the `#` lines at the top give the meaning and unit of every
+column and repeat every keyword of the run. A chunk whose `time_ordered` is
+false straddles a jump back in time, so its flux mixes two moments; leave it out.
+
+```python
+import pandas as pd
+lc = pd.read_csv('data_bin/chunk_lightcurves.csv', comment='#')
+stars = pd.read_csv('data_bin/chunk_stars.csv', comment='#')
+ratio = lc['flux_star1'] / lc['flux_star4']      # differential photometry
+
+from astropy.table import Table
+lc = Table.read('data_bin/chunk_lightcurves.csv', format='ascii.ecsv')  # with its header
+```
+
+`python run_chunks.py --csv-only` rewrites both from an existing run, without
+binning anything.
 
 The points are deliberately not joined by a line, in the figures and here: the
 chunks are independent measurements, and a line between them draws a trend the

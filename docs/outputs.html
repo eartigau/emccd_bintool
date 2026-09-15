@@ -90,6 +90,14 @@
                 <td>All the chunks stitched together in time, plus the light curves.</td>
               </tr>
               <tr>
+                <td class="mono">chunk_lightcurves.csv</td>
+                <td>The photometry as one table: one row per chunk, with <code>flux_starK</code> and <code>eflux_starK</code> for every star tracked (<code>NaN</code> where a star was not detected), the times, the UTC dates, the sky and the keywords of the raw frames.</td>
+              </tr>
+              <tr>
+                <td class="mono">chunk_stars.csv</td>
+                <td>One row per star, <code>star1</code> first: RA and Dec, mean position on the detector, how many chunks measured it, and its variability statistics. <code>python run_chunks.py --csv-only</code> rewrites both tables from an existing run.</td>
+              </tr>
+              <tr>
                 <td class="mono">figures/bins_on_data.pdf</td>
                 <td>Your bin edges drawn on your own data. Written by <code>plot_bins.py</code>.</td>
               </tr>

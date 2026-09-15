@@ -31,6 +31,10 @@ in the folder named by `output.directory` in the YAML (`data_bin` by default):
     cube, the matching error cube, a table describing each chunk (which frames,
     which times), and the LIGHT CURVES: every star tracked from chunk to chunk,
     with an aperture flux measured on each chunk's flux map;
+  * chunk_lightcurves.csv, the photometry as one table: one row per chunk,
+    with flux_starK and eflux_starK for every star, the chunk's times and UTC
+    dates, the sky, the drift and the raw-frame keywords; and chunk_stars.csv,
+    one row per star, with its position and its variability statistics;
   * figures/*.pdf -- the light curves, the measured drift of the field, and a
     montage of the per-chunk flux maps.
 
@@ -47,6 +51,7 @@ USAGE
     python run_chunks.py                    # settings from embin_config.yaml
     python run_chunks.py --n-chunks 2       # a quick trial on two chunks first
     python run_chunks.py --chunk-size 128 --no-stamps
+    python run_chunks.py --csv-only         # rewrite the two tables, no binning
 
 Every parameter -- which folder the frames are in, the bin edges, the detector
 constants, the chunk size, where the output goes -- lives in embin_config.yaml,
@@ -55,12 +60,16 @@ binning. The command-line flags above only override it for one run.
 """
 
 import argparse
+import glob
 import os
 import sys
+import warnings
 
 import numpy as np
 from astropy.io import fits
 from astropy.table import Table
+from astropy.time import Time
+from astropy.units import UnitsWarning
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from embin import (_resolve, all_frames, build_flux_grid,  # noqa: E402
@@ -235,6 +244,410 @@ def variability_stats(rows):
     return t
 
 
+# A light curve is called variable when a constant flux is rejected at this
+# many sigma. It decides the verdict in each panel title of
+# chunk_lightcurves.pdf, the colour of each track's log line and the
+# lc_verdict column of the light-curve CSV, so the three always agree.
+VARIABLE_SIGMA = 5.0
+
+
+def figure_tracks(tracks, n_chunks, max_panels=8):
+    """The tracks that get a panel in chunk_lightcurves.pdf.
+
+    Those seen in at least half the chunks, and in no fewer than three, up to
+    `max_panels` of them. Track numbers already run from the longest and
+    brightest track down, so the ones kept are the best-measured stars.
+    """
+    ids = np.unique(tracks['track'])
+    keep = [i for i in ids if (tracks['track'] == i).sum() >= max(3, n_chunks // 2)]
+    return keep[:max_panels]
+
+
+# ---------------------------------------------------------------------------
+# The light curves as tables
+# ---------------------------------------------------------------------------
+# A run writes two CSVs, and between them they hold every number behind
+# figures/chunk_lightcurves.pdf:
+#
+#   chunk_lightcurves.csv   one row per chunk: when it was and which frames it
+#                           is, then flux_starK and eflux_starK for every star,
+#                           then the sky, the drift and the keywords of the raw
+#                           frames. A star not detected in a chunk (out of the
+#                           field, or under the detection threshold) is NaN
+#                           there, so every row carries the same columns.
+#   chunk_stars.csv         one row per star, star1 first: where it sits on the
+#                           sky and on the detector, in how many chunks it was
+#                           measured, and its variability statistics.
+#
+# Both are ECSV: a plain comma-separated table under '#' lines that carry each
+# column's meaning and every keyword of the run.
+
+# Keywords of the raw frames carried into the per-chunk table. One that holds
+# the same value in every frame used is written once, in the file's header; one
+# that changes becomes a column, averaged over each chunk's frames (for text,
+# its distinct values in the chunk joined by '|'). Extend the list freely: a
+# keyword the frames do not have is skipped.
+CSV_FRAME_KEYWORDS = (
+    'OBJECT', 'PROGRAM', 'OBSERVER', 'OPERATOR', 'TELESCOP', 'INSTRUME',
+    'ORIGIN', 'FILTER', 'RA', 'DEC', 'EPOCH', 'SERIAL', 'SOFT_VER', 'EXPOSURE',
+    'EFF_EXP', 'WAIT_TIM', 'EM_CGAIN', 'KGAIN_01', 'ANA_GAIN', 'ANA_OFF',
+    'H_FREQ', 'V_FREQ', 'BIN_X', 'BIN_Y', 'SHUTTER', 'SET_TEMP', 'TEMP_CCD',
+    'AIRMASS', 'HA', 'UT', 'ST', 'FOCUS', 'ROTATOR', 'PESTOROT', 'PESTOMIR',
+    'DOME', 'TEMPOUT', 'HUMOUT', 'TEMPIN', 'HUMIN', 'TEMPM')
+
+# What each column means, written into the file's header. Units sit in the
+# brackets rather than in astropy's unit slot, which has no 'e-/frame' and
+# would warn on every read. A column not listed here still goes out.
+CHUNK_COLUMNS = {
+    'date_mid': 'middle of the chunk [UTC], from the DATE keyword of its first '
+                'and last frame',
+    'mjd_mid': 'date_mid as a modified Julian date [d, UTC]',
+    't_mid': 'middle of the chunk since the first frame, camera clock '
+             '(HOSTTIME) [s]; the x axis of the figure',
+    'first_file': 'first frame of the chunk',
+    'last_file': 'last frame of the chunk',
+    'chunk': 'chunk index, in file order',
+    'first_index': "position of the chunk's first frame in the file list",
+    'nframes': 'frames in the chunk',
+    't_start': 'first frame of the chunk, since the first frame, camera clock [s]',
+    't_end': 'last frame of the chunk, since the first frame, camera clock [s]',
+    'date_start': "DATE keyword of the chunk's first frame [UTC]",
+    'date_end': "DATE keyword of the chunk's last frame [UTC]",
+    'time_ordered': 'false if a frame of the chunk is earlier than the one '
+                    'before it: the chunk straddles a jump back in time and '
+                    'its flux mixes two moments',
+    'max_gap': 'longest interval between two consecutive frames of the chunk, '
+               'camera clock [s]; a jump back in time counts by its size, so '
+               'this is large wherever time_ordered is false',
+    'sky': "sky level of the chunk's flux map, already subtracted from every "
+           'flux in this row [e-/frame]',
+    'map_median_err': "median per-pixel error of the chunk's flux map [e-/frame]",
+    'n_sources': 'sources detected in the chunk',
+    'file': "the chunk's histogram-cube file",
+    'flux_file': "the chunk's flux-map file",
+    'ra_centre': 'right ascension of the field centre in this chunk [deg]',
+    'dec_centre': 'declination of the field centre in this chunk [deg]',
+    'dx_drift': 'shift of this chunk onto the astrometric stack, x '
+                '(stack pixel = chunk pixel + shift) [pix]',
+    'dy_drift': 'shift of this chunk onto the astrometric stack, y [pix]',
+    # The telescope control system writes these in hours, not degrees: PESTO's
+    # RA x 15 is the RA of the field centre, and its ST minus RA is its HA.
+    'RA': "telescope right ascension, mean over the chunk's frames [h]",
+    'DEC': "telescope declination, mean over the chunk's frames [deg]",
+    'HA': "hour angle, mean over the chunk's frames [h]",
+    'UT': "UT of the telescope control system, mean over the chunk's frames [h]",
+    'ST': "sidereal time, mean over the chunk's frames [h]",
+}
+
+STAR_COLUMNS = {
+    'star': 'star label: the flux_ and eflux_ columns of the per-chunk table '
+            'carry it',
+    'track': 'track number in the summary (star1 is track 0)',
+    'ra': 'right ascension, mean over the chunks it was seen in [deg]',
+    'dec': 'declination, mean over the chunks it was seen in [deg]',
+    'x_mean': 'mean x on the detector [pix], as in the panel title of the figure',
+    'y_mean': 'mean y on the detector [pix], as in the panel title of the figure',
+    'x_rms': 'rms of x over the chunks [pix]: the field drift, mostly',
+    'y_rms': 'rms of y over the chunks [pix]',
+    'n_valid': 'chunks with a flux measurement; the star is NaN in the other '
+               'rows of the per-chunk table',
+    'n_chunks': 'chunks in the run',
+    'first_chunk': 'first chunk the star was detected in',
+    'last_chunk': 'last chunk the star was detected in',
+    'flux_mean': 'best constant flux, inverse-variance mean [e-/frame]; the '
+                 'dashed line of the figure',
+    'flux_rms': 'rms of the light curve [e-/frame]',
+    'median_err': 'median flux error of the light curve [e-/frame]',
+    'rms_pct': 'flux_rms in percent of flux_mean [%]',
+    'excess_rms_pct': 'scatter left once the photon errors are removed, in '
+                      'percent of flux_mean [%]',
+    'chi2': 'chi2 of the light curve against flux_mean',
+    'dof': 'degrees of freedom of chi2',
+    'chi2_red': 'chi2 / dof',
+    'p_value': 'probability that a constant star scatters at least this much',
+    'sigma': 'p_value as a one-sided Gaussian significance [sigma]',
+    'verdict': f'variable if sigma >= {VARIABLE_SIGMA:g}, as the panel title '
+               f'says; not tested when one chunk is all there is',
+    'in_figure': 'true if the star has a panel in figures/chunk_lightcurves.pdf',
+    'peak_flux_median': 'median peak flux of the detection [e-/frame]',
+    'signif_median': 'median detection significance [sigma]',
+}
+
+STAR_COLUMN_ORDER = ('star', 'track', 'ra', 'dec', 'x_mean', 'y_mean',
+                     'n_valid', 'n_chunks', 'first_chunk', 'last_chunk',
+                     'flux_mean', 'flux_rms', 'median_err', 'rms_pct',
+                     'excess_rms_pct', 'chi2', 'dof', 'chi2_red', 'p_value',
+                     'sigma', 'verdict', 'in_figure', 'peak_flux_median',
+                     'signif_median', 'x_rms', 'y_rms')
+
+
+def _frame_columns(chunks, frames, hdu_index):
+    """Dates, time order and raw-frame keywords of every chunk, from the headers.
+
+    Returns (columns, constant): per-chunk columns as name -> list, one entry
+    per row of `chunks`, and the CSV_FRAME_KEYWORDS that hold one value over
+    every frame used, as name -> (value, comment). (None, None) when `frames`
+    is not the file list the chunks were cut from.
+    """
+    headers = []
+    for row in chunks:
+        first, n = int(row['first_index']), int(row['nframes'])
+        sub = frames[first:first + n]
+        if (len(sub) != n or os.path.basename(sub[0]) != row['first_file']
+                or os.path.basename(sub[-1]) != row['last_file']):
+            log(f"chunk {row['chunk']} was cut from {row['first_file']} .. "
+                f"{row['last_file']}, which are not the frames found now; the "
+                f"tables go out without dates or frame keywords", 'warn')
+            return None, None
+        headers.append([fits.getheader(p, ext=hdu_index) for p in sub])
+    every = [h for chunk in headers for h in chunk]
+
+    constant, varying = {}, []
+    for key in CSV_FRAME_KEYWORDS:
+        values = [h.get(key) for h in every]
+        if all(v is None for v in values):
+            continue
+        if len({repr(v) for v in values}) == 1:
+            constant[key] = (values[0], every[0].comments[key])
+        else:
+            numeric = all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                          for v in values)
+            varying.append((key, numeric))
+
+    columns = {}
+    if all('DATE' in chunk[0] and 'DATE' in chunk[-1] for chunk in headers):
+        t0 = Time([chunk[0]['DATE'] for chunk in headers], scale='utc')
+        t1 = Time([chunk[-1]['DATE'] for chunk in headers], scale='utc')
+        mid = t0 + 0.5 * (t1 - t0)
+        columns.update(date_start=t0.isot, date_mid=mid.isot, date_end=t1.isot,
+                       mjd_mid=mid.mjd)
+    if all('HOSTTIME' in h for h in every):
+        # The clock t_start and t_end come from: HOSTTIME, in milliseconds.
+        steps = [np.diff([h['HOSTTIME'] for h in chunk]) / 1000.0
+                 for chunk in headers]
+        columns['time_ordered'] = [bool(np.all(s > 0)) for s in steps]
+        columns['max_gap'] = [float(np.abs(s).max()) if s.size else 0.0
+                              for s in steps]
+    for key, numeric in varying:
+        if numeric:
+            columns[key] = [float(np.mean([h[key] for h in chunk]))
+                            for chunk in headers]
+        else:
+            columns[key] = ['|'.join(dict.fromkeys(str(h.get(key)) for h in chunk))
+                            for chunk in headers]
+    return columns, constant
+
+
+def _describe(name, known, labels, dtype):
+    """What to say about one column in the file's header."""
+    if name in known:
+        return known[name]
+    for prefix, what, unit in (
+            ('flux_', 'sky-subtracted aperture flux', '[e-/frame]'),
+            ('eflux_', '1-sigma error on the flux', '[e-/frame]'),
+            ('x_', 'centroid on the detector, x', '[pix]'),
+            ('y_', 'centroid on the detector, y', '[pix]')):
+        if name.startswith(prefix) and name[len(prefix):] in labels:
+            return (f'{what} of {name[len(prefix):]} {unit}, NaN in the chunks '
+                    f'where it was not detected')
+    if name in CSV_FRAME_KEYWORDS:
+        return ("raw-frame keyword, mean over the chunk's frames"
+                if dtype.kind in 'iuf' else
+                "raw-frame keyword, the chunk's values joined by '|'")
+    return ''
+
+
+def photometry_tables(summary_path, frames=None, hdu_index=0):
+    """The two light-curve tables, from a chunk summary already on disk.
+
+    Returns (per_chunk, per_star) as astropy Tables, each with its column
+    descriptions and the keywords of the run in `meta`, or (None, None) when
+    the summary holds no light curves at all.
+
+    `frames` is the file list the chunks were cut from; without it the UTC
+    dates and the raw-frame keywords are left out.
+    """
+    with fits.open(summary_path) as hdul:
+        names = {h.name for h in hdul}
+        header = hdul[0].header.copy()
+    if not {'CHUNKS', 'TRACKS'} <= names:
+        log(f'{os.path.basename(summary_path)} holds no light curves, so there '
+            f'are no photometry tables to write', 'warn')
+        return None, None
+    with warnings.catch_warnings():
+        # 'e-/frame' is no astropy unit; the units go into the descriptions.
+        warnings.simplefilter('ignore', UnitsWarning)
+        chunks = Table.read(summary_path, hdu='CHUNKS')
+        tracks = Table.read(summary_path, hdu='TRACKS')
+        var = (Table.read(summary_path, hdu='VARSTAT')
+               if 'VARSTAT' in names else None)
+
+    ids = [int(i) for i in np.unique(tracks['track'])]
+    label = {i: f'star{k}' for k, i in enumerate(ids, start=1)}
+    row_of = {int(c): k for k, c in enumerate(chunks['chunk'])}
+    shown = {int(i) for i in figure_tracks(tracks, len(chunks))}
+
+    # --- the photometry, two columns per star ------------------------------
+    # A star is measured in the chunks it was detected in and nowhere else, so
+    # each column starts as NaN and only the chunks the star appears in are
+    # filled. A star that drifts out of the field, or falls under the
+    # detection threshold for a while, leaves NaN there rather than a hole in
+    # the table: every row has the same columns whatever was in the field.
+    per_star_arrays = {}
+    for i in ids:
+        cols = {name: np.full(len(chunks), np.nan)
+                for name in ('flux', 'eflux', 'x', 'y')}
+        for row in tracks[tracks['track'] == i]:
+            k = row_of.get(int(row['chunk']))
+            if k is None:
+                continue
+            cols['flux'][k], cols['eflux'][k] = row['flux'], row['flux_err']
+            cols['x'][k], cols['y'][k] = row['x'], row['y']
+        per_star_arrays[i] = cols
+
+    # --- one row per chunk -------------------------------------------------
+    base = Table(chunks, copy=True)
+    if 'median_err' in base.colnames:
+        base.rename_column('median_err', 'map_median_err')
+    constant = {}
+    if frames is not None:
+        log(f'reading the headers of the frames behind the {len(chunks)} '
+            f'chunks ...')
+        columns, constant = _frame_columns(base, frames, hdu_index)
+        for name, values in (columns or {}).items():
+            base[name] = values
+        constant = constant or {}
+
+    per_chunk = Table()
+    for name in ('date_mid', 'mjd_mid', 't_mid', 'first_file', 'last_file',
+                 'chunk'):
+        if name in base.colnames:
+            per_chunk[name] = base[name]
+    for i in ids:                      # the photometry, star by star
+        per_chunk[f'flux_{label[i]}'] = per_star_arrays[i]['flux']
+        per_chunk[f'eflux_{label[i]}'] = per_star_arrays[i]['eflux']
+    for name in base.colnames:         # everything else the chunk knows
+        if name not in per_chunk.colnames:
+            per_chunk[name] = base[name]
+    for i in ids:                      # where each star was, chunk by chunk
+        per_chunk[f'x_{label[i]}'] = per_star_arrays[i]['x']
+        per_chunk[f'y_{label[i]}'] = per_star_arrays[i]['y']
+
+    # --- one row per star --------------------------------------------------
+    stats = {int(r['track']): r for r in var} if var is not None else {}
+    rows = []
+    for i in ids:
+        t = tracks[tracks['track'] == i]
+        v = stats.get(i)
+        row = {'star': label[i], 'track': i,
+               'x_mean': float(np.mean(t['x'])), 'y_mean': float(np.mean(t['y'])),
+               'x_rms': float(np.std(t['x'])), 'y_rms': float(np.std(t['y'])),
+               'n_valid': int(np.isfinite(np.asarray(t['flux'], float)).sum()),
+               'n_chunks': len(chunks),
+               'first_chunk': int(np.min(t['chunk'])),
+               'last_chunk': int(np.max(t['chunk'])),
+               'peak_flux_median': float(np.median(t['peak_flux'])),
+               'signif_median': float(np.median(t['signif'])),
+               'in_figure': i in shown}
+        if 'ra' in t.colnames:
+            row['ra'] = float(np.mean(t['ra']))
+            row['dec'] = float(np.mean(t['dec']))
+        for name in ('flux_mean', 'flux_rms', 'median_err', 'chi2', 'dof',
+                     'chi2_red', 'p_value', 'sigma', 'rms_pct',
+                     'excess_rms_pct'):
+            row[name] = float(v[name]) if v is not None else np.nan
+        # A star seen in a single chunk has nothing to test: no scatter to
+        # compare with its error bar, so it gets no verdict rather than a
+        # reassuring one.
+        row['verdict'] = ('not tested' if v is None else
+                          'variable' if v['sigma'] >= VARIABLE_SIGMA else
+                          'not significant')
+        rows.append(row)
+    per_star = Table(rows)
+    per_star = per_star[[c for c in STAR_COLUMN_ORDER if c in per_star.colnames]]
+
+    # --- the headers of both files -----------------------------------------
+    def plain(value):
+        return value.item() if isinstance(value, np.generic) else value
+
+    skip = {'SIMPLE', 'BITPIX', 'NAXIS', 'EXTEND', 'COMMENT', 'HISTORY', ''}
+    meta = {
+        'summary_file': os.path.basename(summary_path),
+        'figure': 'figures/chunk_lightcurves.pdf',
+        'summary_keywords': {k: {'value': header[k], 'comment': header.comments[k]}
+                             for k in header if k not in skip},
+        'frame_keywords': {k: {'value': v, 'comment': c}
+                           for k, (v, c) in constant.items()},
+    }
+    named = [c for c in ('track', 'ra', 'dec', 'x_mean', 'y_mean', 'n_valid')
+             if c in per_star.colnames]
+    per_chunk.meta = dict(
+        meta, description=(
+            'Aperture photometry from run_chunks.py, one row per chunk: the '
+            'numbers behind figures/chunk_lightcurves.pdf. flux_starK and '
+            'eflux_starK are the flux of star K and its error; NaN means the '
+            'star was not detected in that chunk. Rows are in chunk (file) '
+            'order, which is not time order when one folder holds more than '
+            'one acquisition: sort on mjd_mid for that.'),
+        stars={str(r['star']): {c: plain(r[c]) for c in named} for r in per_star})
+    per_star.meta = dict(
+        meta, description=(
+            'One row per star tracked by run_chunks.py, star1 first. The star '
+            'column names the flux_ and eflux_ columns of the per-chunk '
+            'table, chunk_lightcurves.csv.'))
+
+    labels = set(label.values())
+    for table, known in ((per_chunk, CHUNK_COLUMNS), (per_star, STAR_COLUMNS)):
+        for col in table.itercols():
+            col.unit = None
+            described = _describe(col.name, known, labels, col.dtype)
+            if described:
+                col.description = described
+    return per_chunk, per_star
+
+
+def write_photometry_csv(summary_path, csv_path, star_csv_path, frames=None,
+                         hdu_index=0, overwrite=True):
+    """Both light-curve tables, written where they are asked for."""
+    per_chunk, per_star = photometry_tables(summary_path, frames, hdu_index)
+    if per_chunk is None:
+        return None, None
+    per_chunk.write(csv_path, format='ascii.ecsv', delimiter=',',
+                    overwrite=overwrite)
+    per_star.write(star_csv_path, format='ascii.ecsv', delimiter=',',
+                   overwrite=overwrite)
+    log(f'wrote {csv_path}: {len(per_chunk)} chunks x '
+        f'{len(per_chunk.colnames)} columns, {len(per_star)} stars in it', 'value')
+    log(f'wrote {star_csv_path}: {len(per_star)} stars x '
+        f'{len(per_star.colnames)} columns', 'value')
+    return csv_path, star_csv_path
+
+
+def photometry_csv_from_config(cfg, summary_path):
+    """Write both tables beside a summary that is already on disk.
+
+    What `--csv-only` does, and what pesto_astrometry.py calls once it has put
+    sky coordinates into the summary, so the tables never lag behind it. The
+    raw frames only add dates and keywords: if they are no longer on disk, the
+    tables go out without those rather than the run stopping.
+    """
+    inp, out_cfg = cfg['input'], cfg.get('output') or {}
+    pattern = os.path.join(_resolve(cfg, inp['directory']),
+                           inp.get('pattern', '*.fits'))
+    frames = all_frames(cfg) if glob.glob(pattern) else None
+    if frames is None:
+        log(f'no frame matches {pattern}; the photometry tables go out without '
+            f'their dates and keywords', 'warn')
+    outdir = os.path.dirname(summary_path)
+    return write_photometry_csv(
+        summary_path,
+        os.path.join(outdir, str(out_cfg.get('lightcurve_csv',
+                                             'chunk_lightcurves.csv'))),
+        os.path.join(outdir, str(out_cfg.get('stars_csv', 'chunk_stars.csv'))),
+        frames, int(inp.get('hdu', 0)),
+        overwrite=bool(out_cfg.get('overwrite', True)))
+
+
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
@@ -314,9 +727,7 @@ def make_figures(figdir, chunks, tracks, flux_cube):
 
     # --- light curves ------------------------------------------------------
     if tr is not None:
-        ids = np.unique(tr['track'])
-        keep = [i for i in ids if (tr['track'] == i).sum() >= max(3, len(chunks) // 2)]
-        keep = keep[:8]
+        keep = figure_tracks(tr, len(chunks))
         if keep:
             fig, axes = plt.subplots(len(keep), 1, sharex=True,
                                      figsize=(7.5, 1.8 * len(keep) + 1.0))
@@ -335,7 +746,7 @@ def make_figures(figdir, chunks, tracks, flux_cube):
                     v = v[0]
                     ax.axhline(v['flux_mean'], color='C3', lw=1.0, ls='--',
                                alpha=0.8)
-                    verdict = ('variable' if v['sigma'] >= 5
+                    verdict = ('variable' if v['sigma'] >= VARIABLE_SIGMA
                                else 'not significant')
                     note = (f"track {i}  (x, y) = ({np.mean(tr['x'][m]):.0f}, "
                             f"{np.mean(tr['y'][m]):.0f})   "
@@ -430,6 +841,9 @@ def main(argv=None):
     ap.add_argument('--no-stamps', action='store_true',
                     help='skip the raw postage stamps: much smaller output, and the '
                          'frames are then read only once')
+    ap.add_argument('--csv-only', action='store_true',
+                    help='bin nothing: write the photometry tables from the '
+                         'chunk summary of an earlier run, and stop')
     args = ap.parse_args(argv)
 
     log(f'reading configuration from {args.config}')
@@ -455,6 +869,21 @@ def main(argv=None):
     # mostly small counts and empty sky, and compress by an order of magnitude.
     compress = bool(out_cfg.get('compress', True))
     summary_name = gz_path(str(out_cfg.get('summary', 'chunk_summary.fits')), compress)
+    # Never gzipped, these two: they are meant to be opened in a spreadsheet.
+    csv_name = str(out_cfg.get('lightcurve_csv', 'chunk_lightcurves.csv'))
+    stars_name = str(out_cfg.get('stars_csv', 'chunk_stars.csv'))
+
+    # Rebuilding the tables needs the summary and the frame headers, not the
+    # binning: after pesto_astrometry.py has added sky coordinates, or after a
+    # change to what goes in them, that is seconds rather than the whole run.
+    if args.csv_only:
+        summary = os.path.join(outdir, summary_name)
+        if not os.path.exists(summary):
+            log(f'--csv-only needs {summary}, which is not there yet: run '
+                f'without it first', 'error')
+            sys.exit(1)
+        photometry_csv_from_config(cfg, summary)
+        return 0
 
     if size < 2:
         log(f'chunks.size = {size} makes no sense; it must be at least 2', 'error')
@@ -569,17 +998,21 @@ def main(argv=None):
     if len(var):
         log('variability of each track, against a constant flux:', 'info')
         for v in var:
-            level = 'value' if v['sigma'] >= 5 else 'warn'
+            level = 'value' if v['sigma'] >= VARIABLE_SIGMA else 'warn'
             log(f"  track {v['track']:2d}  <f> = {v['flux_mean']:8.4f} e-/frame  "
                 f"rms {v['rms_pct']:5.2f} %  chi2/dof = {v['chi2_red']:6.2f} "
                 f"({v['chi2']:.1f}/{v['dof']:d})  p = {v['p_value']:.2e}  "
                 f"{v['sigma']:5.1f} sigma"
-                + ('' if v['sigma'] >= 5 else '  -> consistent with constant'),
+                + ('' if v['sigma'] >= VARIABLE_SIGMA
+                   else '  -> consistent with constant'),
                 level)
 
     summary = os.path.join(outdir, summary_name)
     write_summary(summary, cfg, edges, chunks, flux_cube, err_cube, rows, aperture,
                   overwrite=overwrite)
+    write_photometry_csv(summary, os.path.join(outdir, csv_name),
+                         os.path.join(outdir, stars_name), files, hdu_index,
+                         overwrite=overwrite)
 
     if flux_cube is not None and want_figures:
         make_figures(figdir, chunks, rows, flux_cube)
